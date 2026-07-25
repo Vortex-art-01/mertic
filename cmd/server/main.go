@@ -4,7 +4,9 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/Vortex-art-01/mertic/internal/handler"
+	"github.com/Vortex-art-01/mertic/internal/handler/counter"
+	"github.com/Vortex-art-01/mertic/internal/handler/gauge"
+	"github.com/Vortex-art-01/mertic/internal/handler/unknownType"
 	"github.com/Vortex-art-01/mertic/internal/repository"
 )
 
@@ -16,5 +18,12 @@ func main() {
 
 func run() error {
 	repo := repository.NewMemStorage()
-	return http.ListenAndServe(":8080", handler.NewRouter(repo))
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("POST /update/gauge/{name}/{value}", gauge.New(repo))
+	mux.HandleFunc("POST /update/counter/{name}/{value}", counter.New(repo))
+	mux.HandleFunc("POST /update/{type}/{name}/{value}", unknownType.New())
+
+	return http.ListenAndServe(":8080", mux)
 }

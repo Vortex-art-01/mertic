@@ -5,7 +5,7 @@ import "sync"
 // Repository описывает контракт хранилища метрик.
 type Repository interface {
 	// SetGauge замещает предыдущее значение метрики типа gauge.
-	SetGauge(name string, value float64)
+	SaveGauge(name string, value float64)
 	// AddCounter прибавляет значение к уже известному серверу counter.
 	AddCounter(name string, value int64)
 	GetGauge(name string) (float64, bool)
@@ -28,7 +28,7 @@ func NewMemStorage() *MemStorage {
 	}
 }
 
-func (s *MemStorage) SetGauge(name string, value float64) {
+func (s *MemStorage) SaveGauge(name string, value float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.gauges[name] = value
