@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	serverAddr     = "http://localhost:8081"
+	serverAddr     = "http://localhost:8080"
 	pollInterval   = 2 * time.Second
 	reportInterval = 10 * time.Second
 )

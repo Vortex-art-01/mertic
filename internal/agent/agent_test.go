@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// senderMock записывает отправленные метрики вместо реальных HTTP-запросов.
 type senderMock struct {
 	gauges     map[string]float64
 	counters   map[string]int64

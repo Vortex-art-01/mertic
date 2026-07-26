@@ -25,5 +25,5 @@ func run() error {
 	mux.HandleFunc("POST /update/counter/{name}/{value}", counter.New(repo))
 	mux.HandleFunc("POST /update/{type}/{name}/{value}", unknowntype.New())
 
-	return http.ListenAndServe(":8081", mux)
+	return http.ListenAndServe(":8080", mux)
 }
