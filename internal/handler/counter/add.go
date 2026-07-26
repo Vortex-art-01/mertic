@@ -1,7 +1,7 @@
 package counter
 
 import (
-	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 )
@@ -28,7 +28,7 @@ func New(saver CounterSaver) http.HandlerFunc {
 		saver.AddCounter(name, value)
 
 		res, _ := saver.GetCounter(name)
-		fmt.Println("counter saved", name, res)
+		log.Printf("counter saved: %s = %d", name, res)
 
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)

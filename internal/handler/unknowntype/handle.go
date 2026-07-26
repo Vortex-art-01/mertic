@@ -1,4 +1,4 @@
-package unknownType
+package unknowntype
 
 import "net/http"
 

@@ -1,7 +1,7 @@
 package gauge
 
 import (
-	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 )
@@ -26,7 +26,7 @@ func New(saver GaugeSaver) http.HandlerFunc {
 
 		saver.SaveGauge(name, value)
 
-		fmt.Println("gauge saved", name, value)
+		log.Printf("gauge saved: %s = %g", name, value)
 
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
