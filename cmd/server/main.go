@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"net/http"
 
@@ -15,15 +16,22 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
+	addr := flag.String("a", "localhost:8080", "адрес эндпоинта HTTP-сервера")
+	flag.Parse()
+
+	if args := flag.Args(); len(args) > 0 {
+		log.Fatalf("неизвестные аргументы: %v", args)
+	}
+
+	if err := run(*addr); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run() error {
+func run(addr string) error {
 	repo := repository.NewMemStorage()
 
-	return http.ListenAndServe(":8080", newRouter(repo))
+	return http.ListenAndServe(addr, newRouter(repo))
 }
 
 func newRouter(repo repository.Repository) http.Handler {
