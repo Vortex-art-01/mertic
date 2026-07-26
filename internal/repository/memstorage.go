@@ -1,18 +1,19 @@
 package repository
 
-import "sync"
+import (
+	"maps"
+	"sync"
+)
 
-// Repository описывает контракт хранилища метрик.
 type Repository interface {
-	// SetGauge замещает предыдущее значение метрики типа gauge.
 	SaveGauge(name string, value float64)
-	// AddCounter прибавляет значение к уже известному серверу counter.
 	AddCounter(name string, value int64)
 	GetGauge(name string) (float64, bool)
 	GetCounter(name string) (int64, bool)
+	Gauges() map[string]float64
+	Counters() map[string]int64
 }
 
-// MemStorage — потокобезопасное in-memory хранилище метрик.
 type MemStorage struct {
 	mu       sync.RWMutex
 	gauges   map[string]float64
@@ -52,4 +53,16 @@ func (s *MemStorage) GetCounter(name string) (int64, bool) {
 	defer s.mu.RUnlock()
 	v, ok := s.counters[name]
 	return v, ok
+}
+
+func (s *MemStorage) Gauges() map[string]float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return maps.Clone(s.gauges)
+}
+
+func (s *MemStorage) Counters() map[string]int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return maps.Clone(s.counters)
 }

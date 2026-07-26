@@ -4,9 +4,13 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/Vortex-art-01/mertic/internal/handler/counter"
 	"github.com/Vortex-art-01/mertic/internal/handler/gauge"
+	"github.com/Vortex-art-01/mertic/internal/handler/index"
 	"github.com/Vortex-art-01/mertic/internal/handler/unknowntype"
+	"github.com/Vortex-art-01/mertic/internal/handler/value"
 	"github.com/Vortex-art-01/mertic/internal/repository"
 )
 
@@ -19,11 +23,18 @@ func main() {
 func run() error {
 	repo := repository.NewMemStorage()
 
-	mux := http.NewServeMux()
+	return http.ListenAndServe(":8080", newRouter(repo))
+}
 
-	mux.HandleFunc("POST /update/gauge/{name}/{value}", gauge.New(repo))
-	mux.HandleFunc("POST /update/counter/{name}/{value}", counter.New(repo))
-	mux.HandleFunc("POST /update/{type}/{name}/{value}", unknowntype.New())
+func newRouter(repo repository.Repository) http.Handler {
+	r := chi.NewRouter()
 
-	return http.ListenAndServe(":8080", mux)
+	r.Get("/", index.New(repo))
+	r.Get("/value/{type}/{name}", value.New(repo))
+
+	r.Post("/update/gauge/{name}/{value}", gauge.New(repo))
+	r.Post("/update/counter/{name}/{value}", counter.New(repo))
+	r.Post("/update/{type}/{name}/{value}", unknowntype.New())
+
+	return r
 }
