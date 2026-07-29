@@ -34,7 +34,7 @@ func run(addr string) error {
 	return http.ListenAndServe(addr, newRouter(repo))
 }
 
-func newRouter(repo repository.Repository) http.Handler {
+func newRouter(repo *repository.MemStorage) http.Handler {
 	r := chi.NewRouter()
 
 	r.Get("/", index.New(repo))

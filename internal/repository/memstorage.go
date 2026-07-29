@@ -5,22 +5,11 @@ import (
 	"sync"
 )
 
-type Repository interface {
-	SaveGauge(name string, value float64)
-	AddCounter(name string, value int64)
-	GetGauge(name string) (float64, bool)
-	GetCounter(name string) (int64, bool)
-	Gauges() map[string]float64
-	Counters() map[string]int64
-}
-
 type MemStorage struct {
-	mu       sync.RWMutex
+	mu       sync.Mutex
 	gauges   map[string]float64
 	counters map[string]int64
 }
-
-var _ Repository = (*MemStorage)(nil)
 
 func NewMemStorage() *MemStorage {
 	return &MemStorage{
@@ -42,27 +31,27 @@ func (s *MemStorage) AddCounter(name string, value int64) {
 }
 
 func (s *MemStorage) GetGauge(name string) (float64, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	v, ok := s.gauges[name]
 	return v, ok
 }
 
 func (s *MemStorage) GetCounter(name string) (int64, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	v, ok := s.counters[name]
 	return v, ok
 }
 
 func (s *MemStorage) Gauges() map[string]float64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return maps.Clone(s.gauges)
 }
 
 func (s *MemStorage) Counters() map[string]int64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return maps.Clone(s.counters)
 }

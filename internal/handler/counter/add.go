@@ -1,14 +1,12 @@
 package counter
 
 import (
-	"log"
 	"net/http"
 	"strconv"
 )
 
 type CounterSaver interface {
 	AddCounter(name string, value int64)
-	GetCounter(name string) (int64, bool)
 }
 
 func New(saver CounterSaver) http.HandlerFunc {
@@ -26,9 +24,6 @@ func New(saver CounterSaver) http.HandlerFunc {
 		}
 
 		saver.AddCounter(name, value)
-
-		res, _ := saver.GetCounter(name)
-		log.Printf("counter saved: %s = %d", name, res)
 
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)

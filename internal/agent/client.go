@@ -11,16 +11,16 @@ import (
 
 // Client отправляет метрики на сервер сбора метрик по HTTP.
 type Client struct {
-	baseURL string
-	http    *http.Client
+	baseURL    string
+	httpClient *http.Client
 }
 
 // NewClient создаёт клиент для сервера по адресу baseURL,
 // например "http://localhost:8080".
 func NewClient(baseURL string) *Client {
 	return &Client{
-		baseURL: baseURL,
-		http:    &http.Client{},
+		baseURL:    baseURL,
+		httpClient: &http.Client{},
 	}
 }
 
@@ -35,7 +35,7 @@ func (c *Client) SendCounter(name string, delta int64) error {
 func (c *Client) send(mType, name, value string) error {
 	url := fmt.Sprintf("%s/update/%s/%s/%s", c.baseURL, mType, name, value)
 
-	resp, err := c.http.Post(url, "text/plain", http.NoBody)
+	resp, err := c.httpClient.Post(url, "text/plain", http.NoBody)
 	if err != nil {
 		return fmt.Errorf("send %s %s: %w", mType, name, err)
 	}

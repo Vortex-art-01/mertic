@@ -47,14 +47,13 @@ func (a *Agent) Run() {
 func (a *Agent) Report() {
 	for name, value := range a.collector.Gauges() {
 		if err := a.sender.SendGauge(name, value); err != nil {
-			log.Println(err)
+			log.Printf("failed to send gauge value %q: %v", name, err)
 		}
 	}
 
-	polls := a.collector.PollCount()
-	if err := a.sender.SendCounter("PollCount", polls-a.reportedPolls); err != nil {
-		log.Println(err)
+	if err := a.sender.SendCounter("PollCount", a.collector.PollCount()); err != nil {
+		log.Printf("failed to send counter value %q: %v", "PollCount", err)
 		return
 	}
-	a.reportedPolls = polls
+	a.collector.pollCount = 0
 }

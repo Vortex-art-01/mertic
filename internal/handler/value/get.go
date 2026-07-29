@@ -39,6 +39,7 @@ func New(getter ValueGetter) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(body))
+		_, _ = w.Write([]byte(body))
+
 	}
 }
