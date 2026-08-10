@@ -31,6 +31,7 @@ func main() {
 func run(addr string) error {
 	repo := repository.NewMemStorage()
 
+	log.Println("Running server on", addr)
 	return http.ListenAndServe(addr, newRouter(repo))
 }
 
