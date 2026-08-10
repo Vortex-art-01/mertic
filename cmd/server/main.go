@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"log"
 	"net/http"
 
@@ -16,14 +15,9 @@ import (
 )
 
 func main() {
-	addr := flag.String("a", "localhost:8080", "адрес эндпоинта HTTP-сервера")
-	flag.Parse()
+	parseFlags()
 
-	if args := flag.Args(); len(args) > 0 {
-		log.Fatalf("неизвестные аргументы: %v", args)
-	}
-
-	if err := run(*addr); err != nil {
+	if err := run(flagRunAddr); err != nil {
 		log.Fatal(err)
 	}
 }
