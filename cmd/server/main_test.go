@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,7 +16,7 @@ func TestRouter(t *testing.T) {
 	repo.SaveGauge("Alloc", 123.45)
 	repo.AddCounter("PollCount", 5)
 
-	ts := httptest.NewServer(newRouter(repo))
+	ts := httptest.NewServer(newRouter(repo, slog.New(slog.DiscardHandler)))
 	defer ts.Close()
 
 	tests := []struct {

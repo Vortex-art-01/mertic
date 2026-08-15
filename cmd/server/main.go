@@ -2,7 +2,9 @@ package main
 
 import (
 	"log"
+	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/go-chi/chi/v5"
 
@@ -11,26 +13,29 @@ import (
 	"github.com/Vortex-art-01/mertic/internal/handler/index"
 	"github.com/Vortex-art-01/mertic/internal/handler/unknowntype"
 	"github.com/Vortex-art-01/mertic/internal/handler/value"
+	"github.com/Vortex-art-01/mertic/internal/logger"
 	"github.com/Vortex-art-01/mertic/internal/repository"
 )
 
 func main() {
 	parseFlags()
 
-	if err := run(flagRunAddr); err != nil {
+	if err := run(flagRunAddr, logger.New(os.Stdout)); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(addr string) error {
+func run(addr string, l *slog.Logger) error {
 	repo := repository.NewMemStorage()
 
-	log.Println("Running server on", addr)
-	return http.ListenAndServe(addr, newRouter(repo))
+	l.Info("running server", slog.String("address", addr))
+	return http.ListenAndServe(addr, newRouter(repo, l))
 }
 
-func newRouter(repo *repository.MemStorage) http.Handler {
+func newRouter(repo *repository.MemStorage, l *slog.Logger) http.Handler {
 	r := chi.NewRouter()
+
+	r.Use(logger.WithLogging(l))
 
 	r.Get("/", index.New(repo))
 	r.Get("/value/{type}/{name}", value.New(repo))
