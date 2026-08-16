@@ -30,6 +30,15 @@ func (s *MemStorage) AddCounter(name string, value int64) {
 	s.counters[name] += value
 }
 
+// SetCounter записывает абсолютное значение счётчика — в отличие от
+// AddCounter, который накапливает приращения. Нужен при восстановлении
+// из дампа, где лежит уже накопленная сумма.
+func (s *MemStorage) SetCounter(name string, value int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.counters[name] = value
+}
+
 func (s *MemStorage) GetGauge(name string) (float64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

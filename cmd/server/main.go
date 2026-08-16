@@ -1,14 +1,20 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Vortex-art-01/mertic/internal/compress"
+	"github.com/Vortex-art-01/mertic/internal/dump"
 	"github.com/Vortex-art-01/mertic/internal/handler/counter"
 	"github.com/Vortex-art-01/mertic/internal/handler/gauge"
 	"github.com/Vortex-art-01/mertic/internal/handler/index"
@@ -20,22 +26,82 @@ import (
 	"github.com/Vortex-art-01/mertic/internal/repository"
 )
 
-func main() {
-	parseFlags()
+const shutdownTimeout = 5 * time.Second
 
-	if err := run(flagRunAddr, logger.New(os.Stdout)); err != nil {
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx, parseFlags(), logger.New(os.Stdout)); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(addr string, l *slog.Logger) error {
+func run(ctx context.Context, cfg config, l *slog.Logger) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	repo := repository.NewMemStorage()
 
-	l.Info("running server", slog.String("address", addr))
-	return http.ListenAndServe(addr, newRouter(repo, l))
+	var storage metricsStorage = repo
+	var d *dump.File
+
+	if cfg.fileStorage != "" {
+		d = dump.New(cfg.fileStorage, repo, l)
+
+		if cfg.restore {
+			if err := d.Load(); err != nil {
+				l.Warn("failed to restore metrics", slog.Any("error", err))
+			}
+		}
+
+		if cfg.storeInterval > 0 {
+			go d.Run(ctx, cfg.storeInterval)
+		} else {
+			storage = &syncStorage{MemStorage: repo, dump: d, l: l}
+		}
+	}
+
+	srv := &http.Server{Addr: cfg.runAddr, Handler: newRouter(storage, l)}
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+
+		<-ctx.Done()
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			l.Error("failed to shut down server gracefully", slog.Any("error", err))
+		}
+	}()
+
+	l.Info("running server",
+		slog.String("address", cfg.runAddr),
+		slog.String("file", cfg.fileStorage),
+		slog.Duration("store interval", cfg.storeInterval),
+		slog.Bool("restore", cfg.restore))
+
+	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+
+	<-shutdownDone
+
+	if d != nil {
+		if err := d.Save(); err != nil {
+			return err
+		}
+	}
+
+	l.Info("server stopped")
+
+	return nil
 }
 
-func newRouter(repo *repository.MemStorage, l *slog.Logger) http.Handler {
+func newRouter(repo metricsStorage, l *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(logger.WithLogging(l))

@@ -17,6 +17,9 @@ cmd/agent/agent
 cmd/server/main
 cmd/server/server
 
+# Дамп метрик сервера
+metrics-db.json
+
 # Dependency directories (remove the comment below to include it)
 vendor/
 
