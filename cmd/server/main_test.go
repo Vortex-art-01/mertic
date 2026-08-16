@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -175,6 +177,87 @@ func TestRouter(t *testing.T) {
 				t.Errorf("value status = %d, want %d", value.StatusCode, http.StatusOK)
 			}
 		})
+	})
+
+	t.Run("gzip round trip", func(t *testing.T) {
+		var compressed bytes.Buffer
+
+		zw := gzip.NewWriter(&compressed)
+		if _, err := zw.Write([]byte(`{"id":"GzipGauge","type":"gauge","value":7.5}`)); err != nil {
+			t.Fatalf("failed to compress request: %v", err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatalf("failed to close gzip writer: %v", err)
+		}
+
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/update", &compressed)
+		if err != nil {
+			t.Fatalf("failed to create request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Encoding", "gzip")
+		// Заголовок выставлен вручную, поэтому транспорт не станет
+		// распаковывать ответ сам — проверяем сжатие как есть.
+		req.Header.Set("Accept-Encoding", "gzip")
+
+		res, err := ts.Client().Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer res.Body.Close()
+
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusOK)
+		}
+		if got := res.Header.Get("Content-Encoding"); got != "gzip" {
+			t.Fatalf("Content-Encoding = %q, want %q", got, "gzip")
+		}
+
+		zr, err := gzip.NewReader(res.Body)
+		if err != nil {
+			t.Fatalf("failed to open gzip response: %v", err)
+		}
+		defer zr.Close()
+
+		var got model.Metrics
+		if err := json.NewDecoder(zr).Decode(&got); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if got.ID != "GzipGauge" || got.Value == nil || *got.Value != 7.5 {
+			t.Errorf("response = %+v, want GzipGauge with value 7.5", got)
+		}
+	})
+
+	t.Run("index page is compressed for gzip-capable client", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet, ts.URL+"/", nil)
+		if err != nil {
+			t.Fatalf("failed to create request: %v", err)
+		}
+		req.Header.Set("Accept-Encoding", "gzip")
+
+		res, err := ts.Client().Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer res.Body.Close()
+
+		if got := res.Header.Get("Content-Encoding"); got != "gzip" {
+			t.Fatalf("Content-Encoding = %q, want %q", got, "gzip")
+		}
+
+		zr, err := gzip.NewReader(res.Body)
+		if err != nil {
+			t.Fatalf("failed to open gzip response: %v", err)
+		}
+		defer zr.Close()
+
+		body, err := io.ReadAll(zr)
+		if err != nil {
+			t.Fatalf("failed to read body: %v", err)
+		}
+		if !strings.Contains(string(body), "Alloc") {
+			t.Errorf("expected page to contain %q, got:\n%s", "Alloc", body)
+		}
 	})
 
 	t.Run("index page lists metrics", func(t *testing.T) {

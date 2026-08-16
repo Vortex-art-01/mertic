@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -11,10 +12,11 @@ import (
 )
 
 type recordedRequest struct {
-	method      string
-	path        string
-	contentType string
-	body        model.Metrics
+	method          string
+	path            string
+	contentType     string
+	contentEncoding string
+	body            model.Metrics
 }
 
 func newTestServer(t *testing.T, status int) (*Client, *[]recordedRequest) {
@@ -23,12 +25,22 @@ func newTestServer(t *testing.T, status int) (*Client, *[]recordedRequest) {
 	var requests []recordedRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := recordedRequest{
-			method:      r.Method,
-			path:        r.URL.Path,
-			contentType: r.Header.Get("Content-Type"),
+			method:          r.Method,
+			path:            r.URL.Path,
+			contentType:     r.Header.Get("Content-Type"),
+			contentEncoding: r.Header.Get("Content-Encoding"),
 		}
 
-		raw, err := io.ReadAll(r.Body)
+		// Агент всегда сжимает тело, поэтому читаем через gzip.
+		zr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			t.Errorf("failed to open gzip body: %v", err)
+			w.WriteHeader(status)
+			return
+		}
+		defer zr.Close()
+
+		raw, err := io.ReadAll(zr)
 		if err != nil {
 			t.Errorf("failed to read request body: %v", err)
 		}
@@ -63,6 +75,9 @@ func TestClientSendGauge(t *testing.T) {
 	}
 	if req.contentType != "application/json" {
 		t.Errorf("Content-Type = %q, want %q", req.contentType, "application/json")
+	}
+	if req.contentEncoding != "gzip" {
+		t.Errorf("Content-Encoding = %q, want %q", req.contentEncoding, "gzip")
 	}
 	if req.body.ID != "Alloc" || req.body.MType != model.Gauge {
 		t.Errorf("body = %+v, want id Alloc of type gauge", req.body)

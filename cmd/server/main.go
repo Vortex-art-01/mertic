@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Vortex-art-01/mertic/internal/compress"
 	"github.com/Vortex-art-01/mertic/internal/handler/counter"
 	"github.com/Vortex-art-01/mertic/internal/handler/gauge"
 	"github.com/Vortex-art-01/mertic/internal/handler/index"
@@ -38,6 +39,7 @@ func newRouter(repo *repository.MemStorage, l *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(logger.WithLogging(l))
+	r.Use(compress.WithGzip)
 
 	updateJSON := updatejson.New(repo, l)
 	valueJSON := valuejson.New(repo, l)
