@@ -3,7 +3,7 @@ package index
 import (
 	"bytes"
 	"html/template"
-	"log"
+	"log/slog"
 	"maps"
 	"net/http"
 	"slices"
@@ -37,7 +37,7 @@ var pageTemplate = template.Must(template.New("index").Parse(`<!DOCTYPE html>
 </html>
 `))
 
-func New(lister MetricsLister) http.HandlerFunc {
+func New(lister MetricsLister, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		gauges := lister.Gauges()
 		counters := lister.Counters()
@@ -53,7 +53,7 @@ func New(lister MetricsLister) http.HandlerFunc {
 		var buf bytes.Buffer
 
 		if err := pageTemplate.Execute(&buf, rows); err != nil {
-			log.Printf("index: failed to render page: %v", err)
+			l.Error("index: failed to render page", slog.Any("error", err))
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}

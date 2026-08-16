@@ -1,15 +1,20 @@
 package agent
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
 type recordedRequest struct {
 	method      string
 	path        string
 	contentType string
+	body        model.Metrics
 }
 
 func newTestServer(t *testing.T, status int) (*Client, *[]recordedRequest) {
@@ -17,11 +22,21 @@ func newTestServer(t *testing.T, status int) (*Client, *[]recordedRequest) {
 
 	var requests []recordedRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests = append(requests, recordedRequest{
+		rec := recordedRequest{
 			method:      r.Method,
 			path:        r.URL.Path,
 			contentType: r.Header.Get("Content-Type"),
-		})
+		}
+
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("failed to read request body: %v", err)
+		}
+		if err := json.Unmarshal(raw, &rec.body); err != nil {
+			t.Errorf("failed to decode request body %q: %v", raw, err)
+		}
+
+		requests = append(requests, rec)
 		w.WriteHeader(status)
 	}))
 	t.Cleanup(srv.Close)
@@ -43,11 +58,20 @@ func TestClientSendGauge(t *testing.T) {
 	if req.method != http.MethodPost {
 		t.Errorf("method = %s, want POST", req.method)
 	}
-	if want := "/update/gauge/Alloc/123.45"; req.path != want {
+	if want := "/update"; req.path != want {
 		t.Errorf("path = %s, want %s", req.path, want)
 	}
-	if req.contentType != "text/plain" {
-		t.Errorf("Content-Type = %q, want %q", req.contentType, "text/plain")
+	if req.contentType != "application/json" {
+		t.Errorf("Content-Type = %q, want %q", req.contentType, "application/json")
+	}
+	if req.body.ID != "Alloc" || req.body.MType != model.Gauge {
+		t.Errorf("body = %+v, want id Alloc of type gauge", req.body)
+	}
+	if req.body.Value == nil || *req.body.Value != 123.45 {
+		t.Errorf("body value = %v, want 123.45", req.body.Value)
+	}
+	if req.body.Delta != nil {
+		t.Errorf("body delta = %v, want nil for gauge", *req.body.Delta)
 	}
 }
 
@@ -61,8 +85,18 @@ func TestClientSendCounter(t *testing.T) {
 	if len(*requests) != 1 {
 		t.Fatalf("got %d requests, want 1", len(*requests))
 	}
-	if want := "/update/counter/PollCount/5"; (*requests)[0].path != want {
-		t.Errorf("path = %s, want %s", (*requests)[0].path, want)
+	req := (*requests)[0]
+	if want := "/update"; req.path != want {
+		t.Errorf("path = %s, want %s", req.path, want)
+	}
+	if req.body.ID != "PollCount" || req.body.MType != model.Counter {
+		t.Errorf("body = %+v, want id PollCount of type counter", req.body)
+	}
+	if req.body.Delta == nil || *req.body.Delta != 5 {
+		t.Errorf("body delta = %v, want 5", req.body.Delta)
+	}
+	if req.body.Value != nil {
+		t.Errorf("body value = %v, want nil for counter", *req.body.Value)
 	}
 }
 

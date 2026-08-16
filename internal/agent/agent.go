@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"log"
+	"log/slog"
 	"time"
 )
 
@@ -15,15 +15,17 @@ var _ MetricsSender = (*Client)(nil)
 type Agent struct {
 	collector      *Collector
 	sender         MetricsSender
+	log            *slog.Logger
 	pollInterval   time.Duration
 	reportInterval time.Duration
 	reportedPolls  int64
 }
 
-func New(sender MetricsSender, pollInterval, reportInterval time.Duration) *Agent {
+func New(sender MetricsSender, pollInterval, reportInterval time.Duration, l *slog.Logger) *Agent {
 	return &Agent{
 		collector:      NewCollector(),
 		sender:         sender,
+		log:            l,
 		pollInterval:   pollInterval,
 		reportInterval: reportInterval,
 	}
@@ -47,12 +49,14 @@ func (a *Agent) Run() {
 func (a *Agent) Report() {
 	for name, value := range a.collector.Gauges() {
 		if err := a.sender.SendGauge(name, value); err != nil {
-			log.Printf("failed to send gauge value %q: %v", name, err)
+			a.log.Error("failed to send gauge",
+				slog.String("metric", name), slog.Any("error", err))
 		}
 	}
 
 	if err := a.sender.SendCounter("PollCount", a.collector.PollCount()); err != nil {
-		log.Printf("failed to send counter value %q: %v", "PollCount", err)
+		a.log.Error("failed to send counter",
+			slog.String("metric", "PollCount"), slog.Any("error", err))
 		return
 	}
 	a.collector.pollCount = 0

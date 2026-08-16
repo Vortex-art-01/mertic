@@ -2,6 +2,7 @@ package index
 
 import (
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -27,7 +28,7 @@ func TestNew(t *testing.T) {
 		counters: map[string]int64{"PollCount": 7},
 	}
 
-	handler := New(lister)
+	handler := New(lister, slog.New(slog.DiscardHandler))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
