@@ -25,7 +25,7 @@ func TestSyncStorageWritesDumpOnUpdate(t *testing.T) {
 
 	storage := &syncStorage{
 		MemStorage: repo,
-		dump:       dump.New(path, repo, l),
+		dump:       dump.New(path, repo, false, l),
 		l:          l,
 	}
 

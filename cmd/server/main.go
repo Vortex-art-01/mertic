@@ -47,13 +47,7 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 	var d *dump.File
 
 	if cfg.fileStorage != "" {
-		d = dump.New(cfg.fileStorage, repo, l)
-
-		if cfg.restore {
-			if err := d.Load(); err != nil {
-				l.Warn("failed to restore metrics", slog.Any("error", err))
-			}
-		}
+		d = dump.New(cfg.fileStorage, repo, cfg.restore, l)
 
 		if cfg.storeInterval > 0 {
 			go d.Run(ctx, cfg.storeInterval)

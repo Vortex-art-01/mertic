@@ -33,8 +33,16 @@ type File struct {
 	l       *slog.Logger
 }
 
-func New(path string, storage Storage, l *slog.Logger) *File {
-	return &File{path: path, storage: storage, l: l}
+func New(path string, storage Storage, restore bool, l *slog.Logger) *File {
+	f := &File{path: path, storage: storage, l: l}
+
+	if restore {
+		if err := f.load(); err != nil {
+			l.Warn("failed to restore metrics", slog.Any("error", err))
+		}
+	}
+
+	return f
 }
 
 func (f *File) Path() string {
@@ -63,7 +71,7 @@ func (f *File) Save() error {
 	return nil
 }
 
-func (f *File) Load() error {
+func (f *File) load() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
