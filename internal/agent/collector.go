@@ -67,3 +67,7 @@ func (c *Collector) Gauges() map[string]float64 {
 func (c *Collector) PollCount() int64 {
 	return c.pollCount
 }
+
+func (c *Collector) ResetPollCount() {
+	c.pollCount = 0
+}

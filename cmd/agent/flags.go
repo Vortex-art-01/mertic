@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"strconv"
 )
@@ -19,17 +20,27 @@ func parseFlags() {
 
 	flag.Parse()
 
-	if env := os.Getenv("ADDRESS"); env != "" {
+	if env, ok := os.LookupEnv("ADDRESS"); ok {
 		flagRunAddr = env
 	}
-	if env := os.Getenv("REPORT_INTERVAL"); env != "" {
-		if v, err := strconv.ParseInt(env, 10, 64); err == nil {
-			flagReportInterval = v
+
+	if env, ok := os.LookupEnv("REPORT_INTERVAL"); ok {
+		v, err := strconv.ParseInt(env, 10, 64)
+
+		if err != nil {
+			panic(fmt.Sprintf("Parse error REPORT_INTERVAL: %s", err))
 		}
+
+		flagReportInterval = v
 	}
-	if env := os.Getenv("POLL_INTERVAL"); env != "" {
-		if v, err := strconv.ParseInt(env, 10, 64); err == nil {
-			flagPollInterval = v
+
+	if env, ok := os.LookupEnv("POLL_INTERVAL"); ok {
+		v, err := strconv.ParseInt(env, 10, 64)
+
+		if err != nil {
+			panic(fmt.Sprintf("Parse error POLL_INTERVAL: %s", err))
 		}
+
+		flagPollInterval = v
 	}
 }

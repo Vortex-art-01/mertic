@@ -59,5 +59,5 @@ func (a *Agent) Report() {
 			slog.String("metric", "PollCount"), slog.Any("error", err))
 		return
 	}
-	a.collector.pollCount = 0
+	a.collector.ResetPollCount()
 }

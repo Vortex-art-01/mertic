@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"strconv"
 	"time"
@@ -29,21 +30,33 @@ func parseFlags() config {
 
 	flag.Parse()
 
-	if env := os.Getenv("ADDRESS"); env != "" {
+	//if env := os.Getenv("ADDRESS"); env != "" {
+	if env, ok := os.LookupEnv("ADDRESS"); ok {
 		runAddr = env
 	}
-	if env := os.Getenv("STORE_INTERVAL"); env != "" {
-		if v, err := strconv.ParseInt(env, 10, 64); err == nil {
-			storeInterval = v
+
+	if env, ok := os.LookupEnv("STORE_INTERVAL"); ok {
+		v, err := strconv.ParseInt(env, 10, 64)
+
+		if err != nil {
+			panic(fmt.Sprintf("Parse error STORE_INTERVAL: %s", err))
 		}
+
+		storeInterval = v
 	}
+
 	if env, ok := os.LookupEnv("FILE_STORAGE_PATH"); ok {
 		fileStorage = env
 	}
-	if env := os.Getenv("RESTORE"); env != "" {
-		if v, err := strconv.ParseBool(env); err == nil {
-			restore = v
+
+	if env, ok := os.LookupEnv("RESTORE"); ok {
+		v, err := strconv.ParseBool(env)
+
+		if err != nil {
+			panic(fmt.Sprintf("Parse error RESTORE: %s", err))
 		}
+
+		restore = v
 	}
 
 	if storeInterval < 0 {
