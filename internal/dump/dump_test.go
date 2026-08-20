@@ -149,3 +149,35 @@ func TestRunSavesPeriodically(t *testing.T) {
 		t.Fatal("Run did not stop after the context was cancelled")
 	}
 }
+
+func TestSaveReplacesPreviousDump(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "metrics-db.json")
+
+	saver, repo := newTestFile(t, path, false)
+
+	for _, value := range []float64{1, 2} {
+		repo.SaveGauge("Alloc", value)
+		if err := saver.Save(); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+	}
+
+	_, restored := newTestFile(t, path, true)
+	if v, ok := restored.GetGauge("Alloc"); !ok || v != 2 {
+		t.Errorf("gauge Alloc = %v, %v; want 2, true", v, ok)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("failed to read %s: %v", dir, err)
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if len(names) != 1 || names[0] != filepath.Base(path) {
+		t.Errorf("directory contains %v, want only %s", names, filepath.Base(path))
+	}
+}

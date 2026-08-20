@@ -58,17 +58,45 @@ func (f *File) Save() error {
 		return fmt.Errorf("encode metrics: %w", err)
 	}
 
-	if dir := filepath.Dir(f.path); dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("create directory %s: %w", dir, err)
-		}
+	dir := filepath.Dir(f.path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create directory %s: %w", dir, err)
 	}
 
-	if err := os.WriteFile(f.path, data, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", f.path, err)
+	tmp, err := os.CreateTemp(dir, filepath.Base(f.path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file for %s: %w", f.path, err)
+	}
+
+	defer os.Remove(tmp.Name())
+
+	if err := writeAndClose(tmp, data); err != nil {
+		return fmt.Errorf("write %s: %w", tmp.Name(), err)
+	}
+
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return fmt.Errorf("chmod %s: %w", tmp.Name(), err)
+	}
+
+	if err := os.Rename(tmp.Name(), f.path); err != nil {
+		return fmt.Errorf("replace %s: %w", f.path, err)
 	}
 
 	return nil
+}
+
+func writeAndClose(file *os.File, data []byte) error {
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		return err
+	}
+
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
+
+	return file.Close()
 }
 
 func (f *File) load() error {
