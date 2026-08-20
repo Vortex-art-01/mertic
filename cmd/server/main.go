@@ -13,7 +13,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/Vortex-art-01/mertic/internal/compress"
 	"github.com/Vortex-art-01/mertic/internal/dump"
 	"github.com/Vortex-art-01/mertic/internal/handler/counter"
 	"github.com/Vortex-art-01/mertic/internal/handler/gauge"
@@ -23,6 +22,7 @@ import (
 	"github.com/Vortex-art-01/mertic/internal/handler/value"
 	"github.com/Vortex-art-01/mertic/internal/handler/valuejson"
 	"github.com/Vortex-art-01/mertic/internal/logger"
+	"github.com/Vortex-art-01/mertic/internal/middleware"
 	"github.com/Vortex-art-01/mertic/internal/repository"
 )
 
@@ -98,8 +98,8 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 func newRouter(repo metricsStorage, l *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
-	r.Use(logger.WithLogging(l))
-	r.Use(compress.WithGzip)
+	r.Use(middleware.WithLogging(l))
+	r.Use(middleware.WithGzip)
 
 	updateJSON := updatejson.New(repo, l)
 	valueJSON := valuejson.New(repo, l)

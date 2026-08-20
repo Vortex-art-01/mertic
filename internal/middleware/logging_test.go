@@ -1,4 +1,4 @@
-package logger
+package middleware
 
 import (
 	"bytes"
@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/Vortex-art-01/mertic/internal/logger"
 )
 
 func TestWithLogging(t *testing.T) {
@@ -64,7 +66,7 @@ func TestWithLogging(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
 
-			handler := WithLogging(New(&buf))(tt.handler)
+			handler := WithLogging(logger.New(&buf))(tt.handler)
 
 			req := httptest.NewRequest(tt.method, tt.uri, nil)
 			w := httptest.NewRecorder()
