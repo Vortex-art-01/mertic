@@ -19,15 +19,11 @@ import (
 // без ожидания тика.
 func TestSyncStorageWritesDumpOnUpdate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metrics-db.json")
-
-	repo := repository.NewMemStorage()
 	l := slog.New(slog.DiscardHandler)
 
-	storage := &syncStorage{
-		MemStorage: repo,
-		dump:       dump.New(path, repo, false, l),
-		l:          l,
-	}
+	storage, dumps := dump.Attach(t.Context(), repository.NewMemStorage(),
+		dump.Config{Path: path}, l)
+	defer dumps.Close()
 
 	ts := httptest.NewServer(newRouter(storage, l))
 	defer ts.Close()

@@ -19,13 +19,6 @@ import (
 	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
-type Storage interface {
-	Gauges() map[string]float64
-	Counters() map[string]int64
-	SaveGauge(name string, value float64)
-	SetCounter(name string, value int64)
-}
-
 type File struct {
 	mu      sync.Mutex
 	path    string
@@ -33,7 +26,9 @@ type File struct {
 	l       *slog.Logger
 }
 
-func New(path string, storage Storage, restore bool, l *slog.Logger) *File {
+// newFile создаёт дамп и, если попросили, сразу восстанавливает из него
+// метрики: отдельного шага инициализации у файла нет.
+func newFile(path string, storage Storage, restore bool, l *slog.Logger) *File {
 	f := &File{path: path, storage: storage, l: l}
 
 	if restore {
@@ -45,11 +40,12 @@ func New(path string, storage Storage, restore bool, l *slog.Logger) *File {
 	return f
 }
 
-func (f *File) Path() string {
-	return f.path
+// Close дописывает последний дамп.
+func (f *File) Close() error {
+	return f.save()
 }
 
-func (f *File) Save() error {
+func (f *File) save() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -142,14 +138,14 @@ func (f *File) load() error {
 	return nil
 }
 
-func (f *File) Run(ctx context.Context, interval time.Duration) {
+func (f *File) run(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			if err := f.Save(); err != nil {
+			if err := f.save(); err != nil {
 				f.l.Error("failed to save metrics", slog.Any("error", err))
 			}
 		case <-ctx.Done():

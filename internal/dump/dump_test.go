@@ -17,7 +17,7 @@ func newTestFile(t *testing.T, path string, restore bool) (*File, *repository.Me
 	t.Helper()
 
 	repo := repository.NewMemStorage()
-	return New(path, repo, restore, slog.New(slog.DiscardHandler)), repo
+	return newFile(path, repo, restore, slog.New(slog.DiscardHandler)), repo
 }
 
 func TestSaveAndLoad(t *testing.T) {
@@ -27,8 +27,8 @@ func TestSaveAndLoad(t *testing.T) {
 	source.SaveGauge("Alloc", 123.45)
 	source.AddCounter("PollCount", 42)
 
-	if err := saver.Save(); err != nil {
-		t.Fatalf("Save() error = %v", err)
+	if err := saver.save(); err != nil {
+		t.Fatalf("save() error = %v", err)
 	}
 
 	data, err := os.ReadFile(path)
@@ -106,8 +106,8 @@ func TestSaveCreatesDirectory(t *testing.T) {
 	saver, repo := newTestFile(t, path, false)
 	repo.SaveGauge("Alloc", 1)
 
-	if err := saver.Save(); err != nil {
-		t.Fatalf("Save() error = %v", err)
+	if err := saver.save(); err != nil {
+		t.Fatalf("save() error = %v", err)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("dump was not created: %v", err)
@@ -126,7 +126,7 @@ func TestRunSavesPeriodically(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		saver.Run(ctx, 10*time.Millisecond)
+		saver.run(ctx, 10*time.Millisecond)
 	}()
 
 	deadline := time.After(2 * time.Second)
@@ -158,8 +158,8 @@ func TestSaveReplacesPreviousDump(t *testing.T) {
 
 	for _, value := range []float64{1, 2} {
 		repo.SaveGauge("Alloc", value)
-		if err := saver.Save(); err != nil {
-			t.Fatalf("Save() error = %v", err)
+		if err := saver.save(); err != nil {
+			t.Fatalf("save() error = %v", err)
 		}
 	}
 

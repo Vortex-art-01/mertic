@@ -41,20 +41,11 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	repo := repository.NewMemStorage()
-
-	var storage metricsStorage = repo
-	var d *dump.File
-
-	if cfg.fileStorage != "" {
-		d = dump.New(cfg.fileStorage, repo, cfg.restore, l)
-
-		if cfg.storeInterval > 0 {
-			go d.Run(ctx, cfg.storeInterval)
-		} else {
-			storage = &syncStorage{MemStorage: repo, dump: d, l: l}
-		}
-	}
+	storage, dumps := dump.Attach(ctx, repository.NewMemStorage(), dump.Config{
+		Path:     cfg.fileStorage,
+		Interval: cfg.storeInterval,
+		Restore:  cfg.restore,
+	}, l)
 
 	srv := &http.Server{Addr: cfg.runAddr, Handler: newRouter(storage, l)}
 
@@ -84,10 +75,8 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 
 	<-shutdownDone
 
-	if d != nil {
-		if err := d.Save(); err != nil {
-			return err
-		}
+	if err := dumps.Close(); err != nil {
+		return err
 	}
 
 	l.Info("server stopped")
