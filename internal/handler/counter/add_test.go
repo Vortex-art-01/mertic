@@ -1,6 +1,9 @@
 package counter
 
 import (
+	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,18 +12,25 @@ import (
 type mockCounterSaver struct {
 	savedName  string
 	savedValue int64
+	err        error
 }
 
-func (m *mockCounterSaver) AddCounter(name string, value int64) {
+func (m *mockCounterSaver) AddCounter(_ context.Context, name string, value int64) error {
+	if m.err != nil {
+		return m.err
+	}
+
 	m.savedName = name
 	m.savedValue += value
+
+	return nil
 }
 
-func (m *mockCounterSaver) GetCounter(name string) (int64, bool) {
+func (m *mockCounterSaver) GetCounter(_ context.Context, name string) (int64, bool, error) {
 	if name == m.savedName {
-		return m.savedValue, true
+		return m.savedValue, true, nil
 	}
-	return 0, false
+	return 0, false, nil
 }
 
 func TestNew(t *testing.T) {
@@ -55,7 +65,7 @@ func TestNew(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			saver := &mockCounterSaver{}
-			handler := New(saver)
+			handler := New(saver, slog.New(slog.DiscardHandler))
 
 			req := httptest.NewRequest(http.MethodPost, "/", nil)
 			req.SetPathValue("name", tt.metricName)
@@ -80,5 +90,26 @@ func TestNew(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Сбой хранилища — не вина клиента: приращение потеряно, и об этом нужно
+// сказать пятисотым, а не тихим 200.
+func TestNewReportsStorageFailure(t *testing.T) {
+	saver := &mockCounterSaver{err: errors.New("storage is down")}
+	handler := New(saver, slog.New(slog.DiscardHandler))
+
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.SetPathValue("name", "test_counter")
+	req.SetPathValue("value", "100")
+
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	res := w.Result()
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusInternalServerError {
+		t.Errorf("expected status %d, got %d", http.StatusInternalServerError, res.StatusCode)
 	}
 }

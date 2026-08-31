@@ -13,21 +13,24 @@ import (
 	"github.com/Vortex-art-01/mertic/internal/repository"
 )
 
+// Ошибки MemStorage в тестах игнорируются: хранилище в памяти их не
+// возвращает, а context и error есть в сигнатурах ради хранилища в базе.
+
 func newTestFile(t *testing.T, path string, restore bool) (*File, *repository.MemStorage) {
 	t.Helper()
 
 	repo := repository.NewMemStorage()
-	return newFile(path, repo, restore, slog.New(slog.DiscardHandler)), repo
+	return newFile(t.Context(), path, repo, restore, slog.New(slog.DiscardHandler)), repo
 }
 
 func TestSaveAndLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metrics-db.json")
 
 	saver, source := newTestFile(t, path, false)
-	source.SaveGauge("Alloc", 123.45)
-	source.AddCounter("PollCount", 42)
+	_ = source.SaveGauge(t.Context(), "Alloc", 123.45)
+	_ = source.AddCounter(t.Context(), "PollCount", 42)
 
-	if err := saver.save(); err != nil {
+	if err := saver.save(t.Context()); err != nil {
 		t.Fatalf("save() error = %v", err)
 	}
 
@@ -46,10 +49,10 @@ func TestSaveAndLoad(t *testing.T) {
 
 	_, restored := newTestFile(t, path, true)
 
-	if v, ok := restored.GetGauge("Alloc"); !ok || v != 123.45 {
+	if v, ok, _ := restored.GetGauge(t.Context(), "Alloc"); !ok || v != 123.45 {
 		t.Errorf("gauge Alloc = %v, %v; want 123.45, true", v, ok)
 	}
-	if v, ok := restored.GetCounter("PollCount"); !ok || v != 42 {
+	if v, ok, _ := restored.GetCounter(t.Context(), "PollCount"); !ok || v != 42 {
 		t.Errorf("counter PollCount = %v, %v; want 42, true", v, ok)
 	}
 }
@@ -64,13 +67,13 @@ func TestLoadReplacesCounter(t *testing.T) {
 	}
 
 	loader, repo := newTestFile(t, path, false)
-	repo.AddCounter("PollCount", 7)
+	_ = repo.AddCounter(t.Context(), "PollCount", 7)
 
-	if err := loader.load(); err != nil {
+	if err := loader.load(t.Context()); err != nil {
 		t.Fatalf("load() error = %v", err)
 	}
 
-	if v, _ := repo.GetCounter("PollCount"); v != 10 {
+	if v, _, _ := repo.GetCounter(t.Context(), "PollCount"); v != 10 {
 		t.Errorf("counter PollCount = %d, want 10", v)
 	}
 }
@@ -78,10 +81,13 @@ func TestLoadReplacesCounter(t *testing.T) {
 func TestLoadMissingFile(t *testing.T) {
 	loader, repo := newTestFile(t, filepath.Join(t.TempDir(), "missing.json"), false)
 
-	if err := loader.load(); err != nil {
+	if err := loader.load(t.Context()); err != nil {
 		t.Fatalf("load() error = %v, want nil for a missing file", err)
 	}
-	if got := len(repo.Gauges()) + len(repo.Counters()); got != 0 {
+
+	gauges, _ := repo.Gauges(t.Context())
+	counters, _ := repo.Counters(t.Context())
+	if got := len(gauges) + len(counters); got != 0 {
 		t.Errorf("storage has %d metrics, want 0", got)
 	}
 }
@@ -93,7 +99,7 @@ func TestLoadBrokenFile(t *testing.T) {
 	}
 
 	loader, _ := newTestFile(t, path, false)
-	if err := loader.load(); err == nil {
+	if err := loader.load(t.Context()); err == nil {
 		t.Error("load() error = nil, want an error for a broken file")
 	}
 }
@@ -104,9 +110,9 @@ func TestSaveCreatesDirectory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "dir", "metrics-db.json")
 
 	saver, repo := newTestFile(t, path, false)
-	repo.SaveGauge("Alloc", 1)
+	_ = repo.SaveGauge(t.Context(), "Alloc", 1)
 
-	if err := saver.save(); err != nil {
+	if err := saver.save(t.Context()); err != nil {
 		t.Fatalf("save() error = %v", err)
 	}
 	if _, err := os.Stat(path); err != nil {
@@ -118,7 +124,7 @@ func TestRunSavesPeriodically(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metrics-db.json")
 
 	saver, repo := newTestFile(t, path, false)
-	repo.SaveGauge("Alloc", 1)
+	_ = repo.SaveGauge(t.Context(), "Alloc", 1)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -157,14 +163,14 @@ func TestSaveReplacesPreviousDump(t *testing.T) {
 	saver, repo := newTestFile(t, path, false)
 
 	for _, value := range []float64{1, 2} {
-		repo.SaveGauge("Alloc", value)
-		if err := saver.save(); err != nil {
+		_ = repo.SaveGauge(t.Context(), "Alloc", value)
+		if err := saver.save(t.Context()); err != nil {
 			t.Fatalf("save() error = %v", err)
 		}
 	}
 
 	_, restored := newTestFile(t, path, true)
-	if v, ok := restored.GetGauge("Alloc"); !ok || v != 2 {
+	if v, ok, _ := restored.GetGauge(t.Context(), "Alloc"); !ok || v != 2 {
 		t.Errorf("gauge Alloc = %v, %v; want 2, true", v, ok)
 	}
 

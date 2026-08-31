@@ -2,6 +2,7 @@ package valuejson
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -10,8 +11,8 @@ import (
 )
 
 type ValueGetter interface {
-	GetGauge(name string) (float64, bool)
-	GetCounter(name string) (int64, bool)
+	GetGauge(ctx context.Context, name string) (float64, bool, error)
+	GetCounter(ctx context.Context, name string) (int64, bool, error)
 }
 
 // reject отвечает клиенту и пишет причину отказа в лог: middleware логирует
@@ -30,25 +31,35 @@ func New(getter ValueGetter, l *slog.Logger) http.HandlerFunc {
 			return
 		}
 
+		var (
+			found bool
+			err   error
+		)
+
 		switch m.MType {
 		case model.Gauge:
-			v, ok := getter.GetGauge(m.ID)
-			if !ok {
-				reject(l, w, http.StatusNotFound, "metric not found",
-					slog.String("metric", m.ID), slog.String("type", m.MType))
-				return
-			}
+			var v float64
+			v, found, err = getter.GetGauge(r.Context(), m.ID)
 			m.Value, m.Delta = &v, nil
 		case model.Counter:
-			v, ok := getter.GetCounter(m.ID)
-			if !ok {
-				reject(l, w, http.StatusNotFound, "metric not found",
-					slog.String("metric", m.ID), slog.String("type", m.MType))
-				return
-			}
+			var v int64
+			v, found, err = getter.GetCounter(r.Context(), m.ID)
 			m.Delta, m.Value = &v, nil
 		default:
 			reject(l, w, http.StatusNotFound, "unknown metric type",
+				slog.String("metric", m.ID), slog.String("type", m.MType))
+			return
+		}
+
+		if err != nil {
+			l.Error("value: failed to read metric",
+				slog.String("metric", m.ID), slog.String("type", m.MType), slog.Any("error", err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		if !found {
+			reject(l, w, http.StatusNotFound, "metric not found",
 				slog.String("metric", m.ID), slog.String("type", m.MType))
 			return
 		}

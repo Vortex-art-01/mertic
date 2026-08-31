@@ -28,11 +28,11 @@ type File struct {
 
 // newFile создаёт дамп и, если попросили, сразу восстанавливает из него
 // метрики: отдельного шага инициализации у файла нет.
-func newFile(path string, storage Storage, restore bool, l *slog.Logger) *File {
+func newFile(ctx context.Context, path string, storage Storage, restore bool, l *slog.Logger) *File {
 	f := &File{path: path, storage: storage, l: l}
 
 	if restore {
-		if err := f.load(); err != nil {
+		if err := f.load(ctx); err != nil {
 			l.Warn("failed to restore metrics", slog.Any("error", err))
 		}
 	}
@@ -40,16 +40,22 @@ func newFile(path string, storage Storage, restore bool, l *slog.Logger) *File {
 	return f
 }
 
-// Close дописывает последний дамп.
+// Close дописывает последний дамп. Контекст сервера к этому моменту уже
+// отменён, поэтому последняя запись идёт с чистым.
 func (f *File) Close() error {
-	return f.save()
+	return f.save(context.Background())
 }
 
-func (f *File) save() error {
+func (f *File) save(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	data, err := json.MarshalIndent(f.snapshot(), "", "  ")
+	metrics, err := f.snapshot(ctx)
+	if err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(metrics, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode metrics: %w", err)
 	}
@@ -95,7 +101,7 @@ func writeAndClose(file *os.File, data []byte) error {
 	return file.Close()
 }
 
-func (f *File) load() error {
+func (f *File) load(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -117,18 +123,24 @@ func (f *File) load() error {
 	}
 
 	for _, m := range metrics {
+		var err error
+
 		switch m.MType {
 		case model.Gauge:
 			if m.Value != nil {
-				f.storage.SaveGauge(m.ID, *m.Value)
+				err = f.storage.SaveGauge(ctx, m.ID, *m.Value)
 			}
 		case model.Counter:
 			if m.Delta != nil {
-				f.storage.SetCounter(m.ID, *m.Delta)
+				err = f.storage.SetCounter(ctx, m.ID, *m.Delta)
 			}
 		default:
 			f.l.Warn("skipping metric of unknown type",
 				slog.String("metric", m.ID), slog.String("type", m.MType))
+		}
+
+		if err != nil {
+			return fmt.Errorf("restore %s: %w", m.ID, err)
 		}
 	}
 
@@ -145,7 +157,7 @@ func (f *File) run(ctx context.Context, interval time.Duration) {
 	for {
 		select {
 		case <-ticker.C:
-			if err := f.save(); err != nil {
+			if err := f.save(ctx); err != nil {
 				f.l.Error("failed to save metrics", slog.Any("error", err))
 			}
 		case <-ctx.Done():
@@ -154,9 +166,16 @@ func (f *File) run(ctx context.Context, interval time.Duration) {
 	}
 }
 
-func (f *File) snapshot() []model.Metrics {
-	gauges := f.storage.Gauges()
-	counters := f.storage.Counters()
+func (f *File) snapshot(ctx context.Context) ([]model.Metrics, error) {
+	gauges, err := f.storage.Gauges(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	counters, err := f.storage.Counters(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	metrics := make([]model.Metrics, 0, len(gauges)+len(counters))
 
@@ -169,5 +188,5 @@ func (f *File) snapshot() []model.Metrics {
 		metrics = append(metrics, model.Metrics{ID: name, MType: model.Counter, Delta: &delta})
 	}
 
-	return metrics
+	return metrics, nil
 }

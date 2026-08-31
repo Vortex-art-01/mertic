@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
@@ -44,23 +45,37 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Без DSN база не нужна: pinger остаётся nil, и GET /ping отвечает 500.
-	var pinger ping.Pinger
-	if cfg.databaseDSN != "" {
+	var (
+		storage metricsStorage
+		// Без DSN база не нужна: pinger остаётся nil, и GET /ping отвечает 500.
+		pinger ping.Pinger
+		// dumps остаётся nil, когда метрики лежат в базе: файловый дамп
+		// в этом режиме не ведётся.
+		dumps io.Closer
+	)
+
+	switch {
+	case cfg.databaseDSN != "":
 		db, err := database.New(cfg.databaseDSN)
 		if err != nil {
 			return err
 		}
 		defer closeDB(db, l)
 
-		pinger = db
-	}
+		if err := database.Migrate(ctx, db); err != nil {
+			return err
+		}
 
-	storage, dumps := dump.Attach(ctx, repository.NewMemStorage(), dump.Config{
-		Path:     cfg.fileStorage,
-		Interval: cfg.storeInterval,
-		Restore:  cfg.restore,
-	}, l)
+		l.Info("database schema is up to date")
+
+		storage, pinger = repository.NewPostgres(db), db
+	default:
+		storage, dumps = dump.Attach(ctx, repository.NewMemStorage(), dump.Config{
+			Path:     cfg.fileStorage,
+			Interval: cfg.storeInterval,
+			Restore:  cfg.restore,
+		}, l)
+	}
 
 	srv := &http.Server{Addr: cfg.runAddr, Handler: newRouter(storage, pinger, l)}
 
@@ -80,10 +95,10 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 
 	l.Info("running server",
 		slog.String("address", cfg.runAddr),
+		slog.String("storage", storageKind(cfg)),
 		slog.String("file", cfg.fileStorage),
 		slog.Duration("store interval", cfg.storeInterval),
-		slog.Bool("restore", cfg.restore),
-		slog.Bool("database", cfg.databaseDSN != ""))
+		slog.Bool("restore", cfg.restore))
 
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -91,13 +106,30 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 
 	<-shutdownDone
 
-	if err := dumps.Close(); err != nil {
-		return err
+	// Дамп дописывается только после штатной остановки: если сервер даже
+	// не поднялся, пустое хранилище затёрло бы уже сохранённые метрики.
+	if dumps != nil {
+		if err := dumps.Close(); err != nil {
+			return err
+		}
 	}
 
 	l.Info("server stopped")
 
 	return nil
+}
+
+// storageKind называет выбранное хранилище — порядок отката тот же, что и в
+// условиях выбора: база, файл, память.
+func storageKind(cfg config) string {
+	switch {
+	case cfg.databaseDSN != "":
+		return "database"
+	case cfg.fileStorage != "":
+		return "file"
+	default:
+		return "memory"
+	}
 }
 
 func closeDB(db *sql.DB, l *slog.Logger) {
@@ -117,7 +149,7 @@ func newRouter(repo metricsStorage, pinger ping.Pinger, l *slog.Logger) http.Han
 
 	r.Get("/", index.New(repo, l))
 	r.Get("/ping", ping.New(pinger, l))
-	r.Get("/value/{type}/{name}", value.New(repo))
+	r.Get("/value/{type}/{name}", value.New(repo, l))
 
 	// Варианты с завершающим слешем регистрируются явно:
 	// chi не сопоставляет "/update/" с маршрутом "/update".
@@ -126,8 +158,8 @@ func newRouter(repo metricsStorage, pinger ping.Pinger, l *slog.Logger) http.Han
 	r.Post("/value", valueJSON)
 	r.Post("/value/", valueJSON)
 
-	r.Post("/update/gauge/{name}/{value}", gauge.New(repo))
-	r.Post("/update/counter/{name}/{value}", counter.New(repo))
+	r.Post("/update/gauge/{name}/{value}", gauge.New(repo, l))
+	r.Post("/update/counter/{name}/{value}", counter.New(repo, l))
 	r.Post("/update/{type}/{name}/{value}", unknowntype.New())
 
 	return r

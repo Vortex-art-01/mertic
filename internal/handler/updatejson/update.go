@@ -2,6 +2,7 @@ package updatejson
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -13,10 +14,10 @@ import (
 // для counter сервер накапливает приращения, поэтому в ответе
 // возвращается сумма, а не пришедшая в запросе delta.
 type MetricsStorage interface {
-	SaveGauge(name string, value float64)
-	AddCounter(name string, value int64)
-	GetGauge(name string) (float64, bool)
-	GetCounter(name string) (int64, bool)
+	SaveGauge(ctx context.Context, name string, value float64) error
+	AddCounter(ctx context.Context, name string, value int64) error
+	GetGauge(ctx context.Context, name string) (float64, bool, error)
+	GetCounter(ctx context.Context, name string) (int64, bool, error)
 }
 
 // reject отвечает клиенту и пишет причину отказа в лог: middleware логирует
@@ -25,6 +26,14 @@ type MetricsStorage interface {
 func reject(l *slog.Logger, w http.ResponseWriter, code int, reason string, attrs ...any) {
 	l.Warn("update rejected", append([]any{slog.String("reason", reason)}, attrs...)...)
 	http.Error(w, reason, code)
+}
+
+// fail сообщает о сбое хранилища: клиенту — 500 без подробностей,
+// в лог — саму ошибку.
+func fail(l *slog.Logger, w http.ResponseWriter, m model.Metrics, err error) {
+	l.Error("update failed",
+		slog.String("metric", m.ID), slog.String("type", m.MType), slog.Any("error", err))
+	http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 }
 
 func New(storage MetricsStorage, l *slog.Logger) http.HandlerFunc {
@@ -40,24 +49,40 @@ func New(storage MetricsStorage, l *slog.Logger) http.HandlerFunc {
 			return
 		}
 
+		ctx := r.Context()
+
 		switch m.MType {
 		case model.Gauge:
 			if m.Value == nil {
 				reject(l, w, http.StatusBadRequest, "gauge value is required", slog.String("metric", m.ID))
 				return
 			}
-			storage.SaveGauge(m.ID, *m.Value)
+			if err := storage.SaveGauge(ctx, m.ID, *m.Value); err != nil {
+				fail(l, w, m, err)
+				return
+			}
 
-			saved, _ := storage.GetGauge(m.ID)
+			saved, _, err := storage.GetGauge(ctx, m.ID)
+			if err != nil {
+				fail(l, w, m, err)
+				return
+			}
 			m.Value, m.Delta = &saved, nil
 		case model.Counter:
 			if m.Delta == nil {
 				reject(l, w, http.StatusBadRequest, "counter delta is required", slog.String("metric", m.ID))
 				return
 			}
-			storage.AddCounter(m.ID, *m.Delta)
+			if err := storage.AddCounter(ctx, m.ID, *m.Delta); err != nil {
+				fail(l, w, m, err)
+				return
+			}
 
-			saved, _ := storage.GetCounter(m.ID)
+			saved, _, err := storage.GetCounter(ctx, m.ID)
+			if err != nil {
+				fail(l, w, m, err)
+				return
+			}
 			m.Delta, m.Value = &saved, nil
 		default:
 			reject(l, w, http.StatusBadRequest, "unknown metric type",

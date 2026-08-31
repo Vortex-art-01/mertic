@@ -1,6 +1,9 @@
 package gauge
 
 import (
+	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,11 +12,18 @@ import (
 type mockGaugeSaver struct {
 	savedName  string
 	savedValue float64
+	err        error
 }
 
-func (m *mockGaugeSaver) SaveGauge(name string, value float64) {
+func (m *mockGaugeSaver) SaveGauge(_ context.Context, name string, value float64) error {
+	if m.err != nil {
+		return m.err
+	}
+
 	m.savedName = name
 	m.savedValue = value
+
+	return nil
 }
 
 func TestNew(t *testing.T) {
@@ -48,7 +58,7 @@ func TestNew(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			saver := &mockGaugeSaver{}
-			handler := New(saver)
+			handler := New(saver, slog.New(slog.DiscardHandler))
 
 			req := httptest.NewRequest(http.MethodPost, "/", nil)
 			req.SetPathValue("name", tt.metricName)
@@ -73,5 +83,26 @@ func TestNew(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Сбой хранилища — не вина клиента: значение потеряно, и об этом нужно
+// сказать пятисотым, а не тихим 200.
+func TestNewReportsStorageFailure(t *testing.T) {
+	saver := &mockGaugeSaver{err: errors.New("storage is down")}
+	handler := New(saver, slog.New(slog.DiscardHandler))
+
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.SetPathValue("name", "test_gauge")
+	req.SetPathValue("value", "10.5")
+
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	res := w.Result()
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusInternalServerError {
+		t.Errorf("expected status %d, got %d", http.StatusInternalServerError, res.StatusCode)
 	}
 }
