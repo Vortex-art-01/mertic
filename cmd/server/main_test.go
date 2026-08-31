@@ -20,7 +20,7 @@ func TestRouter(t *testing.T) {
 	repo.SaveGauge("Alloc", 123.45)
 	repo.AddCounter("PollCount", 5)
 
-	ts := httptest.NewServer(newRouter(repo, slog.New(slog.DiscardHandler)))
+	ts := httptest.NewServer(newRouter(repo, nil, slog.New(slog.DiscardHandler)))
 	defer ts.Close()
 
 	tests := []struct {

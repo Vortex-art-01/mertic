@@ -13,6 +13,7 @@ type config struct {
 	storeInterval time.Duration
 	fileStorage   string
 	restore       bool
+	databaseDSN   string
 }
 
 func parseFlags() config {
@@ -21,12 +22,14 @@ func parseFlags() config {
 		storeInterval int64
 		fileStorage   string
 		restore       bool
+		databaseDSN   string
 	)
 
 	flag.StringVar(&runAddr, "a", "localhost:8080", "адрес эндпоинта HTTP-сервера")
 	flag.Int64Var(&storeInterval, "i", 300, "интервал сохранения метрик на диск, сек (0 — писать синхронно)")
 	flag.StringVar(&fileStorage, "f", "/tmp/metrics-db.json", "путь до файла с сохранёнными метриками")
 	flag.BoolVar(&restore, "r", true, "загружать ранее сохранённые метрики при старте")
+	flag.StringVar(&databaseDSN, "d", "", "строка подключения к базе данных PostgreSQL")
 
 	flag.Parse()
 
@@ -59,6 +62,10 @@ func parseFlags() config {
 		restore = v
 	}
 
+	if env, ok := os.LookupEnv("DATABASE_DSN"); ok {
+		databaseDSN = env
+	}
+
 	if storeInterval < 0 {
 		storeInterval = 0
 	}
@@ -68,5 +75,6 @@ func parseFlags() config {
 		storeInterval: time.Duration(storeInterval) * time.Second,
 		fileStorage:   fileStorage,
 		restore:       restore,
+		databaseDSN:   databaseDSN,
 	}
 }

@@ -25,7 +25,7 @@ func TestSyncStorageWritesDumpOnUpdate(t *testing.T) {
 		dump.Config{Path: path}, l)
 	defer dumps.Close()
 
-	ts := httptest.NewServer(newRouter(storage, l))
+	ts := httptest.NewServer(newRouter(storage, nil, l))
 	defer ts.Close()
 
 	res, err := ts.Client().Post(ts.URL+"/update", "application/json",
