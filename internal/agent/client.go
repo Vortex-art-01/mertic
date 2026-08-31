@@ -1,22 +1,21 @@
 package agent
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 
 	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
-// Client отправляет метрики на сервер сбора метрик по HTTP.
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
 }
 
-// NewClient создаёт клиент для сервера по адресу baseURL,
-// например "http://localhost:8080".
 func NewClient(baseURL string) *Client {
 	return &Client{
 		baseURL:    baseURL,
@@ -25,26 +24,56 @@ func NewClient(baseURL string) *Client {
 }
 
 func (c *Client) SendGauge(name string, value float64) error {
-	return c.send(model.Gauge, name, strconv.FormatFloat(value, 'f', -1, 64))
+	return c.send(model.Metrics{ID: name, MType: model.Gauge, Value: &value})
 }
 
 func (c *Client) SendCounter(name string, delta int64) error {
-	return c.send(model.Counter, name, strconv.FormatInt(delta, 10))
+	return c.send(model.Metrics{ID: name, MType: model.Counter, Delta: &delta})
 }
 
-func (c *Client) send(mType, name, value string) error {
-	url := fmt.Sprintf("%s/update/%s/%s/%s", c.baseURL, mType, name, value)
+func gzipped(data []byte) ([]byte, error) {
+	var buf bytes.Buffer
 
-	resp, err := c.httpClient.Post(url, "text/plain", http.NoBody)
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(data); err != nil {
+		return nil, err
+	}
+
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+func (c *Client) send(m model.Metrics) error {
+	body, err := json.Marshal(m)
 	if err != nil {
-		return fmt.Errorf("send %s %s: %w", mType, name, err)
+		return fmt.Errorf("marshal %s %s: %w", m.MType, m.ID, err)
+	}
+
+	body, err = gzipped(body)
+	if err != nil {
+		return fmt.Errorf("compress %s %s: %w", m.MType, m.ID, err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/update", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("send %s %s: %w", m.MType, m.ID, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("send %s %s: %w", m.MType, m.ID, err)
 	}
 	defer resp.Body.Close()
 
 	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("send %s %s: unexpected status %s", mType, name, resp.Status)
+		return fmt.Errorf("send %s %s: unexpected status %s", m.MType, m.ID, resp.Status)
 	}
 	return nil
 }

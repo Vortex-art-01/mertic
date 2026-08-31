@@ -1,27 +1,28 @@
 package main
 
 import (
-	"flag"
-	"log"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/Vortex-art-01/mertic/internal/agent"
+	"github.com/Vortex-art-01/mertic/internal/logger"
 )
 
 func main() {
-	addr := flag.String("a", "localhost:8080", "адрес эндпоинта HTTP-сервера")
-	reportInterval := flag.Int64("r", 10, "частота отправки метрик на сервер, сек")
-	pollInterval := flag.Int64("p", 2, "частота опроса метрик из пакета runtime, сек")
-	flag.Parse()
+	parseFlags()
 
-	if args := flag.Args(); len(args) > 0 {
-		log.Fatalf("неизвестные аргументы: %v", args)
-	}
+	pollInterval := time.Duration(flagPollInterval) * time.Second
+	reportInterval := time.Duration(flagReportInterval) * time.Second
 
-	client := agent.NewClient("http://" + *addr)
-	a := agent.New(client,
-		time.Duration(*pollInterval)*time.Second,
-		time.Duration(*reportInterval)*time.Second,
+	l := logger.New(os.Stdout)
+	l.Info("running agent",
+		slog.String("server_address", flagRunAddr),
+		slog.String("poll_interval", pollInterval.String()),
+		slog.String("report_interval", reportInterval.String()),
 	)
+
+	client := agent.NewClient("http://" + flagRunAddr)
+	a := agent.New(client, pollInterval, reportInterval, l)
 	a.Run()
 }
