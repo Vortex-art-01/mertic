@@ -7,12 +7,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
+// senderMock ведёт себя как сервер: раскладывает пакет по метрикам и
+// складывает приращения счётчиков.
 type senderMock struct {
-	gauges     map[string]float64
-	counters   map[string]int64
-	counterErr error
+	gauges   map[string]float64
+	counters map[string]int64
+	batches  int
+	err      error
 }
 
 func newSenderMock() *senderMock {
@@ -22,16 +27,22 @@ func newSenderMock() *senderMock {
 	}
 }
 
-func (m *senderMock) SendGauge(name string, value float64) error {
-	m.gauges[name] = value
-	return nil
-}
-
-func (m *senderMock) SendCounter(name string, delta int64) error {
-	if m.counterErr != nil {
-		return m.counterErr
+func (m *senderMock) SendBatch(metrics []model.Metrics) error {
+	if m.err != nil {
+		return m.err
 	}
-	m.counters[name] += delta
+
+	m.batches++
+
+	for _, metric := range metrics {
+		switch metric.MType {
+		case model.Gauge:
+			m.gauges[metric.ID] = *metric.Value
+		case model.Counter:
+			m.counters[metric.ID] += *metric.Delta
+		}
+	}
+
 	return nil
 }
 
@@ -42,7 +53,7 @@ func newTestAgent(sender MetricsSender) (*Agent, *bytes.Buffer) {
 	return a, &logs
 }
 
-func TestAgentReportSendsAllMetrics(t *testing.T) {
+func TestAgentReportSendsAllMetricsInOneBatch(t *testing.T) {
 	sender := newSenderMock()
 	a, logs := newTestAgent(sender)
 
@@ -50,6 +61,9 @@ func TestAgentReportSendsAllMetrics(t *testing.T) {
 	a.collector.Poll()
 	a.Report()
 
+	if sender.batches != 1 {
+		t.Errorf("sent %d batches, want 1", sender.batches)
+	}
 	for _, name := range wantGauges {
 		if _, ok := sender.gauges[name]; !ok {
 			t.Errorf("gauge %q not sent", name)
@@ -84,10 +98,10 @@ func TestAgentReportRetriesPollCountAfterError(t *testing.T) {
 	a, logs := newTestAgent(sender)
 
 	a.collector.Poll()
-	sender.counterErr = errors.New("server unavailable")
+	sender.err = errors.New("server unavailable")
 	a.Report()
 
-	sender.counterErr = nil
+	sender.err = nil
 	a.collector.Poll()
 	a.Report()
 
@@ -99,9 +113,24 @@ func TestAgentReportRetriesPollCountAfterError(t *testing.T) {
 
 	// Отправка не прерывает работу агента, поэтому единственный след
 	// неудачи — запись в логе.
-	for _, want := range []string{"failed to send counter", "PollCount", "server unavailable"} {
+	for _, want := range []string{"failed to send metrics", "server unavailable"} {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("log must contain %q, got:\n%s", want, logs)
 		}
+	}
+}
+
+// До первого опроса отправлять нечего — пустой пакет до сервера не доходит.
+func TestAgentReportSkipsEmptyBatch(t *testing.T) {
+	sender := newSenderMock()
+	a, logs := newTestAgent(sender)
+
+	a.Report()
+
+	if sender.batches != 0 {
+		t.Errorf("sent %d batches, want none", sender.batches)
+	}
+	if logs.Len() != 0 {
+		t.Errorf("skipped report must not log, got:\n%s", logs)
 	}
 }

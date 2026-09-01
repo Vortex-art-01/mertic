@@ -10,6 +10,8 @@ import (
 	"context"
 	"maps"
 	"sync"
+
+	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
 type MemStorage struct {
@@ -46,6 +48,32 @@ func (s *MemStorage) SetCounter(_ context.Context, name string, value int64) err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.counters[name] = value
+	return nil
+}
+
+// SaveBatch применяет весь пакет метрик под одной блокировкой: параллельные
+// запросы видят хранилище либо до пакета, либо после него целиком.
+//
+// Повторяющиеся имена внутри пакета обрабатываются так же, как отдельные
+// запросы: у gauge остаётся последнее значение, приращения counter
+// складываются.
+func (s *MemStorage) SaveBatch(_ context.Context, metrics []model.Metrics) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, m := range metrics {
+		switch m.MType {
+		case model.Gauge:
+			if m.Value != nil {
+				s.gauges[m.ID] = *m.Value
+			}
+		case model.Counter:
+			if m.Delta != nil {
+				s.counters[m.ID] += *m.Delta
+			}
+		}
+	}
+
 	return nil
 }
 

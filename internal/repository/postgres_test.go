@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Vortex-art-01/mertic/internal/database"
+	"github.com/Vortex-art-01/mertic/internal/model"
 	"github.com/Vortex-art-01/mertic/internal/repository"
 )
 
@@ -134,5 +135,72 @@ func TestPostgresListsMetrics(t *testing.T) {
 	}
 	if counters[counterName] != 5 {
 		t.Errorf("counters[%s] = %v, want 5", counterName, counters[counterName])
+	}
+}
+
+// SaveBatch пишет весь пакет за одну транзакцию: gauge перезаписывается,
+// приращения counter складываются с тем, что уже лежит в базе.
+func TestPostgresSaveBatch(t *testing.T) {
+	storage, db := newPostgres(t)
+	gaugeName := uniqueName(t, db, "gauges")
+	counterName := uniqueName(t, db, "counters")
+
+	if err := storage.AddCounter(t.Context(), counterName, 2); err != nil {
+		t.Fatalf("AddCounter() error = %v", err)
+	}
+
+	value, delta := 42.5, int64(3)
+	batch := []model.Metrics{
+		{ID: gaugeName, MType: model.Gauge, Value: &value},
+		{ID: counterName, MType: model.Counter, Delta: &delta},
+	}
+
+	if err := storage.SaveBatch(t.Context(), batch); err != nil {
+		t.Fatalf("SaveBatch() error = %v", err)
+	}
+
+	if got, ok, err := storage.GetGauge(t.Context(), gaugeName); err != nil || !ok || got != value {
+		t.Errorf("gauge %s = %v, %v, %v; want %v, true, nil", gaugeName, got, ok, err, value)
+	}
+	if got, ok, err := storage.GetCounter(t.Context(), counterName); err != nil || !ok || got != 5 {
+		t.Errorf("counter %s = %v, %v, %v; want 5, true, nil", counterName, got, ok, err)
+	}
+}
+
+// Повторы внутри пакета — обычное дело: многострочный INSERT ... ON CONFLICT
+// не может изменить одну строку дважды, поэтому имена схлопываются заранее.
+func TestPostgresSaveBatchWithRepeatedNames(t *testing.T) {
+	storage, db := newPostgres(t)
+	gaugeName := uniqueName(t, db, "gauges")
+	counterName := uniqueName(t, db, "counters")
+
+	first, last := 1.5, 2.25
+	one, two := int64(4), int64(6)
+	batch := []model.Metrics{
+		{ID: gaugeName, MType: model.Gauge, Value: &first},
+		{ID: counterName, MType: model.Counter, Delta: &one},
+		{ID: gaugeName, MType: model.Gauge, Value: &last},
+		{ID: counterName, MType: model.Counter, Delta: &two},
+	}
+
+	if err := storage.SaveBatch(t.Context(), batch); err != nil {
+		t.Fatalf("SaveBatch() error = %v", err)
+	}
+
+	// У gauge остаётся последнее значение, приращения counter складываются.
+	if got, _, err := storage.GetGauge(t.Context(), gaugeName); err != nil || got != last {
+		t.Errorf("gauge %s = %v, %v; want %v", gaugeName, got, err, last)
+	}
+	if got, _, err := storage.GetCounter(t.Context(), counterName); err != nil || got != 10 {
+		t.Errorf("counter %s = %v, %v; want 10", counterName, got, err)
+	}
+}
+
+// Пустой пакет до базы не доходит и ошибкой не считается.
+func TestPostgresSaveEmptyBatch(t *testing.T) {
+	storage, _ := newPostgres(t)
+
+	if err := storage.SaveBatch(t.Context(), nil); err != nil {
+		t.Errorf("SaveBatch() error = %v, want nil", err)
 	}
 }

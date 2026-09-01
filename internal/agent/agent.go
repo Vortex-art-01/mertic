@@ -3,11 +3,16 @@ package agent
 import (
 	"log/slog"
 	"time"
+
+	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
+// pollCountMetric — имя счётчика опросов; сервер складывает присланные
+// приращения сам.
+const pollCountMetric = "PollCount"
+
 type MetricsSender interface {
-	SendGauge(name string, value float64) error
-	SendCounter(name string, delta int64) error
+	SendBatch(metrics []model.Metrics) error
 }
 
 var _ MetricsSender = (*Client)(nil)
@@ -18,7 +23,6 @@ type Agent struct {
 	log            *slog.Logger
 	pollInterval   time.Duration
 	reportInterval time.Duration
-	reportedPolls  int64
 }
 
 func New(sender MetricsSender, pollInterval, reportInterval time.Duration, l *slog.Logger) *Agent {
@@ -46,18 +50,41 @@ func (a *Agent) Run() {
 	}
 }
 
+// Report отправляет всё собранное одним пакетом. Счётчик опросов сбрасывается
+// только после успеха: неудачная отправка не должна терять приращения —
+// следующий отчёт унесёт их вместе со своими.
 func (a *Agent) Report() {
-	for name, value := range a.collector.Gauges() {
-		if err := a.sender.SendGauge(name, value); err != nil {
-			a.log.Error("failed to send gauge",
-				slog.String("metric", name), slog.Any("error", err))
-		}
-	}
-
-	if err := a.sender.SendCounter("PollCount", a.collector.PollCount()); err != nil {
-		a.log.Error("failed to send counter",
-			slog.String("metric", "PollCount"), slog.Any("error", err))
+	metrics := a.batch()
+	if len(metrics) == 0 {
 		return
 	}
+
+	if err := a.sender.SendBatch(metrics); err != nil {
+		a.log.Error("failed to send metrics",
+			slog.Int("count", len(metrics)), slog.Any("error", err))
+		return
+	}
+
 	a.collector.ResetPollCount()
+}
+
+// batch складывает собранное в один список: gauge как есть, накопленные
+// опросы — приращением counter. Пустой список означает, что отправлять нечего.
+func (a *Agent) batch() []model.Metrics {
+	gauges := a.collector.Gauges()
+	delta := a.collector.PollCount()
+
+	metrics := make([]model.Metrics, 0, len(gauges)+1)
+
+	for name, value := range gauges {
+		metrics = append(metrics, model.Metrics{ID: name, MType: model.Gauge, Value: &value})
+	}
+
+	if delta != 0 {
+		metrics = append(metrics, model.Metrics{
+			ID: pollCountMetric, MType: model.Counter, Delta: &delta,
+		})
+	}
+
+	return metrics
 }

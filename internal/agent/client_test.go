@@ -16,7 +16,17 @@ type recordedRequest struct {
 	path            string
 	contentType     string
 	contentEncoding string
-	body            model.Metrics
+	body            []byte
+}
+
+// decode разбирает записанное тело в переданную структуру: у одиночной
+// отправки это Metrics, у пакетной — []Metrics.
+func (r recordedRequest) decode(t *testing.T, v any) {
+	t.Helper()
+
+	if err := json.Unmarshal(r.body, v); err != nil {
+		t.Fatalf("failed to decode request body %q: %v", r.body, err)
+	}
 }
 
 func newTestServer(t *testing.T, status int) (*Client, *[]recordedRequest) {
@@ -40,12 +50,8 @@ func newTestServer(t *testing.T, status int) (*Client, *[]recordedRequest) {
 		}
 		defer zr.Close()
 
-		raw, err := io.ReadAll(zr)
-		if err != nil {
+		if rec.body, err = io.ReadAll(zr); err != nil {
 			t.Errorf("failed to read request body: %v", err)
-		}
-		if err := json.Unmarshal(raw, &rec.body); err != nil {
-			t.Errorf("failed to decode request body %q: %v", raw, err)
 		}
 
 		requests = append(requests, rec)
@@ -54,6 +60,75 @@ func newTestServer(t *testing.T, status int) (*Client, *[]recordedRequest) {
 	t.Cleanup(srv.Close)
 
 	return NewClient(srv.URL), &requests
+}
+
+func TestClientSendBatch(t *testing.T) {
+	client, requests := newTestServer(t, http.StatusOK)
+
+	value, delta := 123.45, int64(5)
+	batch := []model.Metrics{
+		{ID: "Alloc", MType: model.Gauge, Value: &value},
+		{ID: "PollCount", MType: model.Counter, Delta: &delta},
+	}
+
+	if err := client.SendBatch(batch); err != nil {
+		t.Fatalf("SendBatch: %v", err)
+	}
+
+	// Весь пакет уходит одним запросом — в этом и смысл /updates/.
+	if len(*requests) != 1 {
+		t.Fatalf("got %d requests, want 1", len(*requests))
+	}
+	req := (*requests)[0]
+	if req.method != http.MethodPost {
+		t.Errorf("method = %s, want POST", req.method)
+	}
+	if want := "/updates/"; req.path != want {
+		t.Errorf("path = %s, want %s", req.path, want)
+	}
+	if req.contentType != "application/json" {
+		t.Errorf("Content-Type = %q, want %q", req.contentType, "application/json")
+	}
+	if req.contentEncoding != "gzip" {
+		t.Errorf("Content-Encoding = %q, want %q", req.contentEncoding, "gzip")
+	}
+
+	var got []model.Metrics
+	req.decode(t, &got)
+
+	if len(got) != 2 {
+		t.Fatalf("body has %d metrics, want 2", len(got))
+	}
+	if got[0].ID != "Alloc" || got[0].Value == nil || *got[0].Value != value {
+		t.Errorf("body[0] = %+v, want Alloc gauge with value %v", got[0], value)
+	}
+	if got[1].ID != "PollCount" || got[1].Delta == nil || *got[1].Delta != delta {
+		t.Errorf("body[1] = %+v, want PollCount counter with delta %d", got[1], delta)
+	}
+}
+
+// Пустой пакет не повод беспокоить сервер.
+func TestClientSendBatchSkipsEmpty(t *testing.T) {
+	client, requests := newTestServer(t, http.StatusOK)
+
+	if err := client.SendBatch(nil); err != nil {
+		t.Fatalf("SendBatch: %v", err)
+	}
+
+	if len(*requests) != 0 {
+		t.Errorf("got %d requests, want none", len(*requests))
+	}
+}
+
+func TestClientSendBatchErrorStatus(t *testing.T) {
+	client, _ := newTestServer(t, http.StatusInternalServerError)
+
+	value := 1.0
+	batch := []model.Metrics{{ID: "Alloc", MType: model.Gauge, Value: &value}}
+
+	if err := client.SendBatch(batch); err == nil {
+		t.Error("expected error on non-200 response, got nil")
+	}
 }
 
 func TestClientSendGauge(t *testing.T) {
@@ -79,14 +154,18 @@ func TestClientSendGauge(t *testing.T) {
 	if req.contentEncoding != "gzip" {
 		t.Errorf("Content-Encoding = %q, want %q", req.contentEncoding, "gzip")
 	}
-	if req.body.ID != "Alloc" || req.body.MType != model.Gauge {
-		t.Errorf("body = %+v, want id Alloc of type gauge", req.body)
+
+	var got model.Metrics
+	req.decode(t, &got)
+
+	if got.ID != "Alloc" || got.MType != model.Gauge {
+		t.Errorf("body = %+v, want id Alloc of type gauge", got)
 	}
-	if req.body.Value == nil || *req.body.Value != 123.45 {
-		t.Errorf("body value = %v, want 123.45", req.body.Value)
+	if got.Value == nil || *got.Value != 123.45 {
+		t.Errorf("body value = %v, want 123.45", got.Value)
 	}
-	if req.body.Delta != nil {
-		t.Errorf("body delta = %v, want nil for gauge", *req.body.Delta)
+	if got.Delta != nil {
+		t.Errorf("body delta = %v, want nil for gauge", *got.Delta)
 	}
 }
 
@@ -104,14 +183,18 @@ func TestClientSendCounter(t *testing.T) {
 	if want := "/update"; req.path != want {
 		t.Errorf("path = %s, want %s", req.path, want)
 	}
-	if req.body.ID != "PollCount" || req.body.MType != model.Counter {
-		t.Errorf("body = %+v, want id PollCount of type counter", req.body)
+
+	var got model.Metrics
+	req.decode(t, &got)
+
+	if got.ID != "PollCount" || got.MType != model.Counter {
+		t.Errorf("body = %+v, want id PollCount of type counter", got)
 	}
-	if req.body.Delta == nil || *req.body.Delta != 5 {
-		t.Errorf("body delta = %v, want 5", req.body.Delta)
+	if got.Delta == nil || *got.Delta != 5 {
+		t.Errorf("body delta = %v, want 5", got.Delta)
 	}
-	if req.body.Value != nil {
-		t.Errorf("body value = %v, want nil for counter", *req.body.Value)
+	if got.Value != nil {
+		t.Errorf("body value = %v, want nil for counter", *got.Value)
 	}
 }
 

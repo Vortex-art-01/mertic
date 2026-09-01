@@ -5,6 +5,8 @@ import (
 	"io"
 	"log/slog"
 	"time"
+
+	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
 type Storage interface {
@@ -17,6 +19,7 @@ type Storage interface {
 type Metrics interface {
 	Storage
 	AddCounter(ctx context.Context, name string, value int64) error
+	SaveBatch(ctx context.Context, metrics []model.Metrics) error
 	GetGauge(ctx context.Context, name string) (float64, bool, error)
 	GetCounter(ctx context.Context, name string) (int64, bool, error)
 }
@@ -61,6 +64,17 @@ func (s *syncStorage) SaveGauge(ctx context.Context, name string, value float64)
 
 func (s *syncStorage) AddCounter(ctx context.Context, name string, value int64) error {
 	if err := s.Metrics.AddCounter(ctx, name, value); err != nil {
+		return err
+	}
+
+	s.flush(ctx)
+
+	return nil
+}
+
+// SaveBatch сбрасывает дамп один раз на весь пакет, а не на каждую метрику.
+func (s *syncStorage) SaveBatch(ctx context.Context, metrics []model.Metrics) error {
+	if err := s.Metrics.SaveBatch(ctx, metrics); err != nil {
 		return err
 	}
 

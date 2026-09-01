@@ -23,6 +23,7 @@ import (
 	"github.com/Vortex-art-01/mertic/internal/handler/ping"
 	"github.com/Vortex-art-01/mertic/internal/handler/unknowntype"
 	"github.com/Vortex-art-01/mertic/internal/handler/updatejson"
+	"github.com/Vortex-art-01/mertic/internal/handler/updatesjson"
 	"github.com/Vortex-art-01/mertic/internal/handler/value"
 	"github.com/Vortex-art-01/mertic/internal/handler/valuejson"
 	"github.com/Vortex-art-01/mertic/internal/logger"
@@ -145,6 +146,7 @@ func newRouter(repo metricsStorage, pinger ping.Pinger, l *slog.Logger) http.Han
 	r.Use(middleware.WithGzip)
 
 	updateJSON := updatejson.New(repo, l)
+	updatesJSON := updatesjson.New(repo, l)
 	valueJSON := valuejson.New(repo, l)
 
 	r.Get("/", index.New(repo, l))
@@ -155,6 +157,8 @@ func newRouter(repo metricsStorage, pinger ping.Pinger, l *slog.Logger) http.Han
 	// chi не сопоставляет "/update/" с маршрутом "/update".
 	r.Post("/update", updateJSON)
 	r.Post("/update/", updateJSON)
+	r.Post("/updates", updatesJSON)
+	r.Post("/updates/", updatesJSON)
 	r.Post("/value", valueJSON)
 	r.Post("/value/", valueJSON)
 
