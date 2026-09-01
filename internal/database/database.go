@@ -10,10 +10,10 @@ import (
 
 	"github.com/pressly/goose/v3"
 
-	// Драйвер pgx регистрируется под именем "pgx" и используется
-	// через стандартный database/sql.
 	_ "github.com/jackc/pgx/v5/stdlib"
 
+	"github.com/Vortex-art-01/mertic/internal/pgerrors"
+	"github.com/Vortex-art-01/mertic/internal/retry"
 	"github.com/Vortex-art-01/mertic/migrations"
 )
 
@@ -22,7 +22,7 @@ const (
 	maxIdleConns    = 5           // сколько свободных держим открытыми
 	connMaxIdleTime = time.Minute // как долго свободное соединение живёт
 
-	// connectTimeout ограничивает первое обращение к базе: недоступный
+	// connectTimeout ограничивает одну попытку подключения: недоступный
 	// сервер не должен держать запуск до истечения таймаутов драйвера.
 	connectTimeout = 5 * time.Second
 )
@@ -44,13 +44,8 @@ func New(dsn string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Migrate накатывает недостающие миграции. Свою служебную таблицу с версией
-// схемы goose создаёт сам, так что пустой базы достаточно.
 func Migrate(ctx context.Context, db *sql.DB) error {
-	connectCtx, cancel := context.WithTimeout(ctx, connectTimeout)
-	defer cancel()
-
-	if err := db.PingContext(connectCtx); err != nil {
+	if err := connect(ctx, db); err != nil {
 		return fmt.Errorf("connect to database: %w", err)
 	}
 
@@ -68,4 +63,14 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	}
 
 	return nil
+}
+
+func connect(ctx context.Context, db *sql.DB) error {
+	return retry.Do(ctx, pgerrors.Retriable, func() error {
+		// Таймаут отсчитывается заново на каждой попытке.
+		connectCtx, cancel := context.WithTimeout(ctx, connectTimeout)
+		defer cancel()
+
+		return db.PingContext(connectCtx)
+	})
 }

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"strings"
@@ -27,7 +28,7 @@ func newSenderMock() *senderMock {
 	}
 }
 
-func (m *senderMock) SendBatch(metrics []model.Metrics) error {
+func (m *senderMock) SendBatch(_ context.Context, metrics []model.Metrics) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -59,7 +60,7 @@ func TestAgentReportSendsAllMetricsInOneBatch(t *testing.T) {
 
 	a.collector.Poll()
 	a.collector.Poll()
-	a.Report()
+	a.Report(t.Context())
 
 	if sender.batches != 1 {
 		t.Errorf("sent %d batches, want 1", sender.batches)
@@ -82,10 +83,10 @@ func TestAgentReportSendsPollCountDelta(t *testing.T) {
 	a, _ := newTestAgent(sender)
 
 	a.collector.Poll()
-	a.Report()
+	a.Report(t.Context())
 	a.collector.Poll()
 	a.collector.Poll()
-	a.Report()
+	a.Report(t.Context())
 
 	// Сервер суммирует приращения: 1 + 2 = 3.
 	if got := sender.counters["PollCount"]; got != 3 {
@@ -99,11 +100,11 @@ func TestAgentReportRetriesPollCountAfterError(t *testing.T) {
 
 	a.collector.Poll()
 	sender.err = errors.New("server unavailable")
-	a.Report()
+	a.Report(t.Context())
 
 	sender.err = nil
 	a.collector.Poll()
-	a.Report()
+	a.Report(t.Context())
 
 	// Первая отправка не удалась, поэтому второй отчёт
 	// должен включать оба неотправленных приращения.
@@ -125,12 +126,33 @@ func TestAgentReportSkipsEmptyBatch(t *testing.T) {
 	sender := newSenderMock()
 	a, logs := newTestAgent(sender)
 
-	a.Report()
+	a.Report(t.Context())
 
 	if sender.batches != 0 {
 		t.Errorf("sent %d batches, want none", sender.batches)
 	}
 	if logs.Len() != 0 {
 		t.Errorf("skipped report must not log, got:\n%s", logs)
+	}
+}
+
+// Отмена контекста останавливает агент: Run возвращается сам.
+func TestAgentRunStopsOnCanceledContext(t *testing.T) {
+	a, _ := newTestAgent(newSenderMock())
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.Run(ctx)
+	}()
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Error("Run did not return after the context was canceled")
 	}
 }

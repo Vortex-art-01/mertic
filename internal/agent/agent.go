@@ -1,18 +1,17 @@
 package agent
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
 	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
-// pollCountMetric — имя счётчика опросов; сервер складывает присланные
-// приращения сам.
 const pollCountMetric = "PollCount"
 
 type MetricsSender interface {
-	SendBatch(metrics []model.Metrics) error
+	SendBatch(ctx context.Context, metrics []model.Metrics) error
 }
 
 var _ MetricsSender = (*Client)(nil)
@@ -35,31 +34,32 @@ func New(sender MetricsSender, pollInterval, reportInterval time.Duration, l *sl
 	}
 }
 
-// Run запускает бесконечный цикл сбора и отправки метрик.
-func (a *Agent) Run() {
-	lastReport := time.Now()
+func (a *Agent) Run(ctx context.Context) {
+	poll := time.NewTicker(a.pollInterval)
+	defer poll.Stop()
+
+	report := time.NewTicker(a.reportInterval)
+	defer report.Stop()
 
 	for {
-		time.Sleep(a.pollInterval)
-		a.collector.Poll()
-
-		if time.Since(lastReport) >= a.reportInterval {
-			a.Report()
-			lastReport = time.Now()
+		select {
+		case <-poll.C:
+			a.collector.Poll()
+		case <-report.C:
+			a.Report(ctx)
+		case <-ctx.Done():
+			return
 		}
 	}
 }
 
-// Report отправляет всё собранное одним пакетом. Счётчик опросов сбрасывается
-// только после успеха: неудачная отправка не должна терять приращения —
-// следующий отчёт унесёт их вместе со своими.
-func (a *Agent) Report() {
+func (a *Agent) Report(ctx context.Context) {
 	metrics := a.batch()
 	if len(metrics) == 0 {
 		return
 	}
 
-	if err := a.sender.SendBatch(metrics); err != nil {
+	if err := a.sender.SendBatch(ctx, metrics); err != nil {
 		a.log.Error("failed to send metrics",
 			slog.Int("count", len(metrics)), slog.Any("error", err))
 		return
@@ -68,8 +68,6 @@ func (a *Agent) Report() {
 	a.collector.ResetPollCount()
 }
 
-// batch складывает собранное в один список: gauge как есть, накопленные
-// опросы — приращением counter. Пустой список означает, что отправлять нечего.
 func (a *Agent) batch() []model.Metrics {
 	gauges := a.collector.Gauges()
 	delta := a.collector.PollCount()

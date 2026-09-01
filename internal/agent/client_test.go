@@ -2,11 +2,14 @@ package agent
 
 import (
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Vortex-art-01/mertic/internal/model"
 )
@@ -59,7 +62,7 @@ func newTestServer(t *testing.T, status int) (*Client, *[]recordedRequest) {
 	}))
 	t.Cleanup(srv.Close)
 
-	return NewClient(srv.URL), &requests
+	return newTestClient(srv.URL), &requests
 }
 
 func TestClientSendBatch(t *testing.T) {
@@ -71,7 +74,7 @@ func TestClientSendBatch(t *testing.T) {
 		{ID: "PollCount", MType: model.Counter, Delta: &delta},
 	}
 
-	if err := client.SendBatch(batch); err != nil {
+	if err := client.SendBatch(t.Context(), batch); err != nil {
 		t.Fatalf("SendBatch: %v", err)
 	}
 
@@ -111,7 +114,7 @@ func TestClientSendBatch(t *testing.T) {
 func TestClientSendBatchSkipsEmpty(t *testing.T) {
 	client, requests := newTestServer(t, http.StatusOK)
 
-	if err := client.SendBatch(nil); err != nil {
+	if err := client.SendBatch(t.Context(), nil); err != nil {
 		t.Fatalf("SendBatch: %v", err)
 	}
 
@@ -126,7 +129,7 @@ func TestClientSendBatchErrorStatus(t *testing.T) {
 	value := 1.0
 	batch := []model.Metrics{{ID: "Alloc", MType: model.Gauge, Value: &value}}
 
-	if err := client.SendBatch(batch); err == nil {
+	if err := client.SendBatch(t.Context(), batch); err == nil {
 		t.Error("expected error on non-200 response, got nil")
 	}
 }
@@ -134,7 +137,7 @@ func TestClientSendBatchErrorStatus(t *testing.T) {
 func TestClientSendGauge(t *testing.T) {
 	client, requests := newTestServer(t, http.StatusOK)
 
-	if err := client.SendGauge("Alloc", 123.45); err != nil {
+	if err := client.SendGauge(t.Context(), "Alloc", 123.45); err != nil {
 		t.Fatalf("SendGauge: %v", err)
 	}
 
@@ -172,7 +175,7 @@ func TestClientSendGauge(t *testing.T) {
 func TestClientSendCounter(t *testing.T) {
 	client, requests := newTestServer(t, http.StatusOK)
 
-	if err := client.SendCounter("PollCount", 5); err != nil {
+	if err := client.SendCounter(t.Context(), "PollCount", 5); err != nil {
 		t.Fatalf("SendCounter: %v", err)
 	}
 
@@ -201,15 +204,125 @@ func TestClientSendCounter(t *testing.T) {
 func TestClientSendErrorStatus(t *testing.T) {
 	client, _ := newTestServer(t, http.StatusBadRequest)
 
-	if err := client.SendGauge("Alloc", 1); err == nil {
+	if err := client.SendGauge(t.Context(), "Alloc", 1); err == nil {
 		t.Error("expected error on non-200 response, got nil")
 	}
 }
 
-func TestClientSendServerUnavailable(t *testing.T) {
-	client := NewClient("http://127.0.0.1:1") // заведомо недоступный адрес
+// newTestClient — клиент с теми же повторами, но без настоящих пауз между
+// ними: проверять расписание задержек — дело тестов пакета retry.
+func newTestClient(baseURL string) *Client {
+	c := NewClient(baseURL)
+	c.delays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
 
-	if err := client.SendGauge("Alloc", 1); err == nil {
-		t.Error("expected error when server is unreachable, got nil")
+	return c
+}
+
+// flakyServer отвечает ошибкой status первым failures запросам и успехом —
+// всем последующим: так ведёт себя сервер, который вот-вот поднимется.
+func flakyServer(t *testing.T, failures int, status int) (*Client, *int) {
+	t.Helper()
+
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+
+		if requests <= failures {
+			w.WriteHeader(status)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	return newTestClient(srv.URL), &requests
+}
+
+// Временная ошибка сервера — повод повторить, а не потерять метрики.
+func TestClientRetriesUntilServerRecovers(t *testing.T) {
+	client, requests := flakyServer(t, 2, http.StatusServiceUnavailable)
+
+	value := 1.0
+	batch := []model.Metrics{{ID: "Alloc", MType: model.Gauge, Value: &value}}
+
+	if err := client.SendBatch(t.Context(), batch); err != nil {
+		t.Fatalf("SendBatch: %v", err)
+	}
+
+	// Две неудачи и успех с третьей попытки.
+	if *requests != 3 {
+		t.Errorf("server got %d requests, want 3", *requests)
+	}
+}
+
+// Повторов ровно три сверх первой попытки — дальше отправка сдаётся.
+func TestClientGivesUpAfterThreeRetries(t *testing.T) {
+	client, requests := flakyServer(t, 100, http.StatusServiceUnavailable)
+
+	value := 1.0
+	batch := []model.Metrics{{ID: "Alloc", MType: model.Gauge, Value: &value}}
+
+	err := client.SendBatch(t.Context(), batch)
+	if err == nil {
+		t.Fatal("expected error after all attempts failed, got nil")
+	}
+
+	var status *StatusError
+	if !errors.As(err, &status) {
+		t.Fatalf("error = %v, want *StatusError", err)
+	}
+
+	if *requests != 4 {
+		t.Errorf("server got %d requests, want 4 (1 attempt + 3 retries)", *requests)
+	}
+}
+
+// Отказ по существу запроса повторять бессмысленно: ответ не изменится.
+func TestClientDoesNotRetryBadRequest(t *testing.T) {
+	client, requests := flakyServer(t, 100, http.StatusBadRequest)
+
+	value := 1.0
+	batch := []model.Metrics{{ID: "Alloc", MType: model.Gauge, Value: &value}}
+
+	if err := client.SendBatch(t.Context(), batch); err == nil {
+		t.Fatal("expected error on 400 response, got nil")
+	}
+
+	if *requests != 1 {
+		t.Errorf("server got %d requests, want 1", *requests)
+	}
+}
+
+// Недоступный сервер — тот самый случай, ради которого повторы и заведены:
+// агент обязан пережить его, вернув ошибку, а не завершившись.
+func TestClientRetriesUnreachableServer(t *testing.T) {
+	client := newTestClient("http://127.0.0.1:1") // заведомо недоступный адрес
+
+	err := client.SendGauge(t.Context(), "Alloc", 1)
+	if err == nil {
+		t.Fatal("expected error when server is unreachable, got nil")
+	}
+
+	var transport *TransportError
+	if !errors.As(err, &transport) {
+		t.Errorf("error = %v, want *TransportError", err)
+	}
+}
+
+// Отмена контекста прекращает повторы сразу: досиживать паузы незачем.
+func TestClientStopsRetryingOnCanceledContext(t *testing.T) {
+	client, requests := flakyServer(t, 100, http.StatusServiceUnavailable)
+	client.delays = []time.Duration{time.Hour, time.Hour, time.Hour}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if err := client.SendGauge(ctx, "Alloc", 1); err == nil {
+		t.Fatal("expected error on canceled context, got nil")
+	}
+
+	if *requests != 0 {
+		t.Errorf("server got %d requests, want none", *requests)
 	}
 }

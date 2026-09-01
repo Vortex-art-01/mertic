@@ -9,10 +9,10 @@ import (
 	"slices"
 
 	"github.com/Vortex-art-01/mertic/internal/model"
+	"github.com/Vortex-art-01/mertic/internal/pgerrors"
+	"github.com/Vortex-art-01/mertic/internal/retry"
 )
 
-// Postgres хранит метрики в базе: gauge — в таблице gauges, counter — в
-// counters. Схему создают миграции (см. пакет migrations).
 type Postgres struct {
 	db *sql.DB
 }
@@ -21,50 +21,57 @@ func NewPostgres(db *sql.DB) *Postgres {
 	return &Postgres{db: db}
 }
 
-// SaveGauge перезаписывает значение: у gauge важно только последнее.
 func (p *Postgres) SaveGauge(ctx context.Context, name string, value float64) error {
 	const query = `
 		INSERT INTO gauges (name, value) VALUES ($1, $2)
 		ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`
 
-	if _, err := p.db.ExecContext(ctx, query, name, value); err != nil {
+	if err := p.exec(ctx, query, name, value); err != nil {
 		return fmt.Errorf("save gauge %s: %w", name, err)
 	}
 
 	return nil
 }
 
-// AddCounter накапливает приращение прямо в базе: складывать на стороне
-// сервера нельзя — между чтением и записью значение может изменить
-// параллельный запрос.
 func (p *Postgres) AddCounter(ctx context.Context, name string, value int64) error {
 	const query = `
 		INSERT INTO counters (name, delta) VALUES ($1, $2)
 		ON CONFLICT (name) DO UPDATE SET delta = counters.delta + EXCLUDED.delta`
 
-	if _, err := p.db.ExecContext(ctx, query, name, value); err != nil {
+	if err := p.exec(ctx, query, name, value); err != nil {
 		return fmt.Errorf("add counter %s: %w", name, err)
 	}
 
 	return nil
 }
 
-// SaveBatch применяет весь пакет за одну транзакцию: в базу попадают либо
-// все метрики, либо ни одной.
-//
-// Повторяющиеся имена схлопываются заранее (см. splitBatch): многострочный
-// INSERT ... ON CONFLICT не может изменить одну и ту же строку дважды.
-// Приращения counter по-прежнему складывает база, а не сервер, — между
-// чтением и записью значение мог бы изменить параллельный запрос.
+func (p *Postgres) exec(ctx context.Context, query string, args ...any) error {
+	return retry.Do(ctx, pgerrors.Retriable, func() error {
+		_, err := p.db.ExecContext(ctx, query, args...)
+		return err
+	})
+}
+
 func (p *Postgres) SaveBatch(ctx context.Context, metrics []model.Metrics) error {
 	gauges, counters := splitBatch(metrics)
 	if len(gauges) == 0 && len(counters) == 0 {
 		return nil
 	}
 
-	tx, err := p.db.BeginTx(ctx, nil)
+	err := retry.Do(ctx, pgerrors.Retriable, func() error {
+		return p.saveBatch(ctx, gauges, counters)
+	})
 	if err != nil {
 		return fmt.Errorf("save batch: %w", err)
+	}
+
+	return nil
+}
+
+func (p *Postgres) saveBatch(ctx context.Context, gauges map[string]float64, counters map[string]int64) error {
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
 	}
 	// Откат после успешного Commit — уже не операция: база вернёт
 	// sql.ErrTxDone, и ошибка здесь ничего не значит.
@@ -78,18 +85,9 @@ func (p *Postgres) SaveBatch(ctx context.Context, metrics []model.Metrics) error
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("save batch: %w", err)
-	}
-
-	return nil
+	return tx.Commit()
 }
 
-// saveGauges обновляет все gauge одним запросом: имена и значения уезжают
-// в базу двумя массивами, а unnest разворачивает их обратно в строки.
-//
-// Имена отсортированы, чтобы параллельные пакеты брали блокировки строк в
-// одном порядке и не вставали в клинч друг с другом.
 func saveGauges(ctx context.Context, tx *sql.Tx, gauges map[string]float64) error {
 	if len(gauges) == 0 {
 		return nil
@@ -113,8 +111,6 @@ func saveGauges(ctx context.Context, tx *sql.Tx, gauges map[string]float64) erro
 	return nil
 }
 
-// addCounters накапливает приращения всех counter одним запросом; про
-// порядок имён — см. saveGauges.
 func addCounters(ctx context.Context, tx *sql.Tx, counters map[string]int64) error {
 	if len(counters) == 0 {
 		return nil
@@ -138,10 +134,6 @@ func addCounters(ctx context.Context, tx *sql.Tx, counters map[string]int64) err
 	return nil
 }
 
-// splitBatch сводит пакет к двум наборам без повторов: у gauge остаётся
-// последнее значение, приращения counter складываются — ровно так же, как
-// если бы метрики пришли по одной. Метрики без значения пропускаются:
-// хендлер их не пропустит, а восстановление из дампа может.
 func splitBatch(metrics []model.Metrics) (map[string]float64, map[string]int64) {
 	gauges := make(map[string]float64)
 	counters := make(map[string]int64)
@@ -166,7 +158,12 @@ func (p *Postgres) GetGauge(ctx context.Context, name string) (float64, bool, er
 	const query = `SELECT value FROM gauges WHERE name = $1`
 
 	var value float64
-	switch err := p.db.QueryRowContext(ctx, query, name).Scan(&value); {
+
+	err := retry.Do(ctx, pgerrors.Retriable, func() error {
+		return p.db.QueryRowContext(ctx, query, name).Scan(&value)
+	})
+
+	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return 0, false, nil
 	case err != nil:
@@ -180,7 +177,12 @@ func (p *Postgres) GetCounter(ctx context.Context, name string) (int64, bool, er
 	const query = `SELECT delta FROM counters WHERE name = $1`
 
 	var delta int64
-	switch err := p.db.QueryRowContext(ctx, query, name).Scan(&delta); {
+
+	err := retry.Do(ctx, pgerrors.Retriable, func() error {
+		return p.db.QueryRowContext(ctx, query, name).Scan(&delta)
+	})
+
+	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return 0, false, nil
 	case err != nil:
@@ -193,25 +195,31 @@ func (p *Postgres) GetCounter(ctx context.Context, name string) (int64, bool, er
 func (p *Postgres) Gauges(ctx context.Context) (map[string]float64, error) {
 	const query = `SELECT name, value FROM gauges`
 
-	rows, err := p.db.QueryContext(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("list gauges: %w", err)
-	}
-	defer rows.Close()
+	var gauges map[string]float64
 
-	gauges := make(map[string]float64)
-	for rows.Next() {
-		var (
-			name  string
-			value float64
-		)
-		if err := rows.Scan(&name, &value); err != nil {
-			return nil, fmt.Errorf("list gauges: %w", err)
+	err := retry.Do(ctx, pgerrors.Retriable, func() error {
+		rows, err := p.db.QueryContext(ctx, query)
+		if err != nil {
+			return err
 		}
-		gauges[name] = value
-	}
+		defer rows.Close()
 
-	if err := rows.Err(); err != nil {
+		gauges = make(map[string]float64)
+
+		for rows.Next() {
+			var (
+				name  string
+				value float64
+			)
+			if err := rows.Scan(&name, &value); err != nil {
+				return err
+			}
+			gauges[name] = value
+		}
+
+		return rows.Err()
+	})
+	if err != nil {
 		return nil, fmt.Errorf("list gauges: %w", err)
 	}
 
@@ -221,25 +229,31 @@ func (p *Postgres) Gauges(ctx context.Context) (map[string]float64, error) {
 func (p *Postgres) Counters(ctx context.Context) (map[string]int64, error) {
 	const query = `SELECT name, delta FROM counters`
 
-	rows, err := p.db.QueryContext(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("list counters: %w", err)
-	}
-	defer rows.Close()
+	var counters map[string]int64
 
-	counters := make(map[string]int64)
-	for rows.Next() {
-		var (
-			name  string
-			delta int64
-		)
-		if err := rows.Scan(&name, &delta); err != nil {
-			return nil, fmt.Errorf("list counters: %w", err)
+	err := retry.Do(ctx, pgerrors.Retriable, func() error {
+		rows, err := p.db.QueryContext(ctx, query)
+		if err != nil {
+			return err
 		}
-		counters[name] = delta
-	}
+		defer rows.Close()
 
-	if err := rows.Err(); err != nil {
+		counters = make(map[string]int64)
+
+		for rows.Next() {
+			var (
+				name  string
+				delta int64
+			)
+			if err := rows.Scan(&name, &delta); err != nil {
+				return err
+			}
+			counters[name] = delta
+		}
+
+		return rows.Err()
+	})
+	if err != nil {
 		return nil, fmt.Errorf("list counters: %w", err)
 	}
 
