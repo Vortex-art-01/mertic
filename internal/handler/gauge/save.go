@@ -1,15 +1,17 @@
 package gauge
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
 	"strconv"
 )
 
 type GaugeSaver interface {
-	SaveGauge(name string, value float64)
+	SaveGauge(ctx context.Context, name string, value float64) error
 }
 
-func New(saver GaugeSaver) http.HandlerFunc {
+func New(saver GaugeSaver, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		if name == "" {
@@ -23,7 +25,12 @@ func New(saver GaugeSaver) http.HandlerFunc {
 			return
 		}
 
-		saver.SaveGauge(name, value)
+		if err := saver.SaveGauge(r.Context(), name, value); err != nil {
+			l.Error("failed to save gauge",
+				slog.String("metric", name), slog.Any("error", err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)

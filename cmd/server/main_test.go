@@ -17,10 +17,10 @@ import (
 
 func TestRouter(t *testing.T) {
 	repo := repository.NewMemStorage()
-	repo.SaveGauge("Alloc", 123.45)
-	repo.AddCounter("PollCount", 5)
+	_ = repo.SaveGauge(t.Context(), "Alloc", 123.45)
+	_ = repo.AddCounter(t.Context(), "PollCount", 5)
 
-	ts := httptest.NewServer(newRouter(repo, slog.New(slog.DiscardHandler)))
+	ts := httptest.NewServer(newRouter(repo, nil, slog.New(slog.DiscardHandler)))
 	defer ts.Close()
 
 	tests := []struct {
@@ -226,6 +226,73 @@ func TestRouter(t *testing.T) {
 		if got.ID != "GzipGauge" || got.Value == nil || *got.Value != 7.5 {
 			t.Errorf("response = %+v, want GzipGauge with value 7.5", got)
 		}
+	})
+
+	t.Run("batch round trip", func(t *testing.T) {
+		var compressed bytes.Buffer
+
+		batch := `[{"id":"BatchGauge","type":"gauge","value":3.5},
+			{"id":"BatchCount","type":"counter","delta":4},
+			{"id":"BatchCount","type":"counter","delta":6}]`
+
+		zw := gzip.NewWriter(&compressed)
+		if _, err := zw.Write([]byte(batch)); err != nil {
+			t.Fatalf("failed to compress request: %v", err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatalf("failed to close gzip writer: %v", err)
+		}
+
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/updates/", &compressed)
+		if err != nil {
+			t.Fatalf("failed to create request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Encoding", "gzip")
+
+		res, err := ts.Client().Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer res.Body.Close()
+
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusOK)
+		}
+
+		// Метрики из пакета видны наравне с присланными по одной, а
+		// повторённый в пакете счётчик суммируется: 4 + 6.
+		for path, want := range map[string]string{
+			"/value/gauge/BatchGauge":   "3.5",
+			"/value/counter/BatchCount": "10",
+		} {
+			res, err := ts.Client().Get(ts.URL + path)
+			if err != nil {
+				t.Fatalf("request failed: %v", err)
+			}
+
+			body, err := io.ReadAll(res.Body)
+			res.Body.Close()
+			if err != nil {
+				t.Fatalf("failed to read body: %v", err)
+			}
+			if string(body) != want {
+				t.Errorf("GET %s = %q, want %q", path, body, want)
+			}
+		}
+
+		t.Run("without trailing slash", func(t *testing.T) {
+			res, err := ts.Client().Post(ts.URL+"/updates", "application/json",
+				strings.NewReader(`[{"id":"BatchGauge","type":"gauge","value":9}]`))
+			if err != nil {
+				t.Fatalf("request failed: %v", err)
+			}
+			defer res.Body.Close()
+
+			if res.StatusCode != http.StatusOK {
+				t.Errorf("status = %d, want %d", res.StatusCode, http.StatusOK)
+			}
+		})
 	})
 
 	t.Run("index page is compressed for gzip-capable client", func(t *testing.T) {

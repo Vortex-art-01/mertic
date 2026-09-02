@@ -2,6 +2,7 @@ package index
 
 import (
 	"bytes"
+	"context"
 	"html/template"
 	"log/slog"
 	"maps"
@@ -11,8 +12,8 @@ import (
 )
 
 type MetricsLister interface {
-	Gauges() map[string]float64
-	Counters() map[string]int64
+	Gauges(ctx context.Context) (map[string]float64, error)
+	Counters(ctx context.Context) (map[string]int64, error)
 }
 
 type row struct {
@@ -39,8 +40,19 @@ var pageTemplate = template.Must(template.New("index").Parse(`<!DOCTYPE html>
 
 func New(lister MetricsLister, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		gauges := lister.Gauges()
-		counters := lister.Counters()
+		gauges, err := lister.Gauges(r.Context())
+		if err != nil {
+			l.Error("index: failed to list gauges", slog.Any("error", err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		counters, err := lister.Counters(r.Context())
+		if err != nil {
+			l.Error("index: failed to list counters", slog.Any("error", err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 
 		rows := make([]row, 0, len(gauges)+len(counters))
 		for _, name := range slices.Sorted(maps.Keys(gauges)) {

@@ -2,7 +2,9 @@ package updatejson
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +17,7 @@ import (
 type mockStorage struct {
 	gauges   map[string]float64
 	counters map[string]int64
+	err      error
 }
 
 func newMockStorage() *mockStorage {
@@ -24,17 +27,36 @@ func newMockStorage() *mockStorage {
 	}
 }
 
-func (m *mockStorage) SaveGauge(name string, value float64) { m.gauges[name] = value }
-func (m *mockStorage) AddCounter(name string, value int64)  { m.counters[name] += value }
-
-func (m *mockStorage) GetGauge(name string) (float64, bool) {
-	v, ok := m.gauges[name]
-	return v, ok
+func (m *mockStorage) SaveGauge(_ context.Context, name string, value float64) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.gauges[name] = value
+	return nil
 }
 
-func (m *mockStorage) GetCounter(name string) (int64, bool) {
+func (m *mockStorage) AddCounter(_ context.Context, name string, value int64) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.counters[name] += value
+	return nil
+}
+
+func (m *mockStorage) GetGauge(_ context.Context, name string) (float64, bool, error) {
+	if m.err != nil {
+		return 0, false, m.err
+	}
+	v, ok := m.gauges[name]
+	return v, ok, nil
+}
+
+func (m *mockStorage) GetCounter(_ context.Context, name string) (int64, bool, error) {
+	if m.err != nil {
+		return 0, false, m.err
+	}
 	v, ok := m.counters[name]
-	return v, ok
+	return v, ok, nil
 }
 
 // do выполняет запрос и возвращает ответ вместе с тем, что хендлер написал в лог.
@@ -200,5 +222,33 @@ func TestNewSavesZeroValues(t *testing.T) {
 	}
 	if _, ok := storage.gauges["Alloc"]; !ok {
 		t.Error("gauge with zero value was not stored")
+	}
+}
+
+// Метрика, которую не удалось сохранить, не должна выглядеть принятой.
+func TestNewReportsStorageFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "gauge", body: `{"id":"Alloc","type":"gauge","value":1}`},
+		{name: "counter", body: `{"id":"PollCount","type":"counter","delta":1}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			storage := newMockStorage()
+			storage.err = errors.New("storage is down")
+
+			res, logs := do(t, storage, tt.body)
+			defer res.Body.Close()
+
+			if res.StatusCode != http.StatusInternalServerError {
+				t.Errorf("status = %d, want %d", res.StatusCode, http.StatusInternalServerError)
+			}
+			if !strings.Contains(logs, "storage is down") {
+				t.Errorf("storage error not logged, got:\n%s", logs)
+			}
+		})
 	}
 }

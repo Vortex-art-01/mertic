@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
@@ -13,12 +14,15 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Vortex-art-01/mertic/internal/database"
 	"github.com/Vortex-art-01/mertic/internal/dump"
 	"github.com/Vortex-art-01/mertic/internal/handler/counter"
 	"github.com/Vortex-art-01/mertic/internal/handler/gauge"
 	"github.com/Vortex-art-01/mertic/internal/handler/index"
+	"github.com/Vortex-art-01/mertic/internal/handler/ping"
 	"github.com/Vortex-art-01/mertic/internal/handler/unknowntype"
 	"github.com/Vortex-art-01/mertic/internal/handler/updatejson"
+	"github.com/Vortex-art-01/mertic/internal/handler/updatesjson"
 	"github.com/Vortex-art-01/mertic/internal/handler/value"
 	"github.com/Vortex-art-01/mertic/internal/handler/valuejson"
 	"github.com/Vortex-art-01/mertic/internal/logger"
@@ -41,13 +45,32 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	storage, dumps := dump.Attach(ctx, repository.NewMemStorage(), dump.Config{
-		Path:     cfg.fileStorage,
-		Interval: cfg.storeInterval,
-		Restore:  cfg.restore,
-	}, l)
+	var (
+		storage metricsStorage
+		pinger  ping.Pinger
+		dumps   io.Closer
+	)
 
-	srv := &http.Server{Addr: cfg.runAddr, Handler: newRouter(storage, l)}
+	switch {
+	case cfg.databaseDSN != "":
+		pool, err := database.New(ctx, cfg.databaseDSN)
+		if err != nil {
+			return err
+		}
+		defer pool.Close()
+
+		l.Info("database schema is up to date")
+
+		storage, pinger = repository.NewPostgres(pool), pool
+	default:
+		storage, dumps = dump.Attach(ctx, repository.NewMemStorage(), dump.Config{
+			Path:     cfg.fileStorage,
+			Interval: cfg.storeInterval,
+			Restore:  cfg.restore,
+		}, l)
+	}
+
+	srv := &http.Server{Addr: cfg.runAddr, Handler: newRouter(storage, pinger, l)}
 
 	shutdownDone := make(chan struct{})
 	go func() {
@@ -65,6 +88,7 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 
 	l.Info("running server",
 		slog.String("address", cfg.runAddr),
+		slog.String("storage", storageKind(cfg)),
 		slog.String("file", cfg.fileStorage),
 		slog.Duration("store interval", cfg.storeInterval),
 		slog.Bool("restore", cfg.restore))
@@ -75,8 +99,10 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 
 	<-shutdownDone
 
-	if err := dumps.Close(); err != nil {
-		return err
+	if dumps != nil {
+		if err := dumps.Close(); err != nil {
+			return err
+		}
 	}
 
 	l.Info("server stopped")
@@ -84,27 +110,40 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 	return nil
 }
 
-func newRouter(repo metricsStorage, l *slog.Logger) http.Handler {
+func storageKind(cfg config) string {
+	switch {
+	case cfg.databaseDSN != "":
+		return "database"
+	case cfg.fileStorage != "":
+		return "file"
+	default:
+		return "memory"
+	}
+}
+
+func newRouter(repo metricsStorage, pinger ping.Pinger, l *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.WithLogging(l))
 	r.Use(middleware.WithGzip)
 
 	updateJSON := updatejson.New(repo, l)
+	updatesJSON := updatesjson.New(repo, l)
 	valueJSON := valuejson.New(repo, l)
 
 	r.Get("/", index.New(repo, l))
-	r.Get("/value/{type}/{name}", value.New(repo))
+	r.Get("/ping", ping.New(pinger, l))
+	r.Get("/value/{type}/{name}", value.New(repo, l))
 
-	// Варианты с завершающим слешем регистрируются явно:
-	// chi не сопоставляет "/update/" с маршрутом "/update".
 	r.Post("/update", updateJSON)
 	r.Post("/update/", updateJSON)
+	r.Post("/updates", updatesJSON)
+	r.Post("/updates/", updatesJSON)
 	r.Post("/value", valueJSON)
 	r.Post("/value/", valueJSON)
 
-	r.Post("/update/gauge/{name}/{value}", gauge.New(repo))
-	r.Post("/update/counter/{name}/{value}", counter.New(repo))
+	r.Post("/update/gauge/{name}/{value}", gauge.New(repo, l))
+	r.Post("/update/counter/{name}/{value}", counter.New(repo, l))
 	r.Post("/update/{type}/{name}/{value}", unknowntype.New())
 
 	return r

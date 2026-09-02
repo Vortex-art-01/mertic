@@ -2,7 +2,9 @@ package valuejson
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,16 +17,23 @@ import (
 type mockValueGetter struct {
 	gauges   map[string]float64
 	counters map[string]int64
+	err      error
 }
 
-func (m *mockValueGetter) GetGauge(name string) (float64, bool) {
+func (m *mockValueGetter) GetGauge(_ context.Context, name string) (float64, bool, error) {
+	if m.err != nil {
+		return 0, false, m.err
+	}
 	v, ok := m.gauges[name]
-	return v, ok
+	return v, ok, nil
 }
 
-func (m *mockValueGetter) GetCounter(name string) (int64, bool) {
+func (m *mockValueGetter) GetCounter(_ context.Context, name string) (int64, bool, error) {
+	if m.err != nil {
+		return 0, false, m.err
+	}
 	v, ok := m.counters[name]
-	return v, ok
+	return v, ok, nil
 }
 
 // do выполняет запрос и возвращает ответ вместе с тем, что хендлер написал в лог.
@@ -166,5 +175,22 @@ func TestNewDoesNotLogSuccess(t *testing.T) {
 
 	if logs != "" {
 		t.Errorf("successful request must not log, got:\n%s", logs)
+	}
+}
+
+// Недоступное хранилище — это 500, а не 404: метрика может существовать,
+// просто её не удалось прочитать.
+func TestNewReportsStorageFailure(t *testing.T) {
+	getter := newMockValueGetter()
+	getter.err = errors.New("storage is down")
+
+	res, logs := do(t, getter, `{"id":"Alloc","type":"gauge"}`)
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", res.StatusCode, http.StatusInternalServerError)
+	}
+	if !strings.Contains(logs, "storage is down") {
+		t.Errorf("storage error not logged, got:\n%s", logs)
 	}
 }

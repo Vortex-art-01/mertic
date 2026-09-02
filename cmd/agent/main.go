@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/Vortex-art-01/mertic/internal/agent"
@@ -10,6 +13,9 @@ import (
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	parseFlags()
 
 	pollInterval := time.Duration(flagPollInterval) * time.Second
@@ -24,5 +30,7 @@ func main() {
 
 	client := agent.NewClient("http://" + flagRunAddr)
 	a := agent.New(client, pollInterval, reportInterval, l)
-	a.Run()
+	a.Run(ctx)
+
+	l.Info("agent stopped")
 }

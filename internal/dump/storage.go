@@ -5,20 +5,23 @@ import (
 	"io"
 	"log/slog"
 	"time"
+
+	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
 type Storage interface {
-	Gauges() map[string]float64
-	Counters() map[string]int64
-	SaveGauge(name string, value float64)
-	SetCounter(name string, value int64)
+	Gauges(ctx context.Context) (map[string]float64, error)
+	Counters(ctx context.Context) (map[string]int64, error)
+	SaveGauge(ctx context.Context, name string, value float64) error
+	SetCounter(ctx context.Context, name string, value int64) error
 }
 
 type Metrics interface {
 	Storage
-	AddCounter(name string, value int64)
-	GetGauge(name string) (float64, bool)
-	GetCounter(name string) (int64, bool)
+	AddCounter(ctx context.Context, name string, value int64) error
+	SaveBatch(ctx context.Context, metrics []model.Metrics) error
+	GetGauge(ctx context.Context, name string) (float64, bool, error)
+	GetCounter(ctx context.Context, name string) (int64, bool, error)
 }
 
 type Config struct {
@@ -32,7 +35,7 @@ func Attach(ctx context.Context, metrics Metrics, cfg Config, l *slog.Logger) (M
 		return metrics, noopCloser{}
 	}
 
-	f := newFile(cfg.Path, metrics, cfg.Restore, l)
+	f := newFile(ctx, cfg.Path, metrics, cfg.Restore, l)
 
 	if cfg.Interval > 0 {
 		go f.run(ctx, cfg.Interval)
@@ -42,24 +45,48 @@ func Attach(ctx context.Context, metrics Metrics, cfg Config, l *slog.Logger) (M
 	return &syncStorage{Metrics: metrics, file: f, l: l}, f
 }
 
+// syncStorage сбрасывает дамп после каждой записи — режим STORE_INTERVAL=0.
 type syncStorage struct {
 	Metrics
 	file *File
 	l    *slog.Logger
 }
 
-func (s *syncStorage) SaveGauge(name string, value float64) {
-	s.Metrics.SaveGauge(name, value)
-	s.flush()
+func (s *syncStorage) SaveGauge(ctx context.Context, name string, value float64) error {
+	if err := s.Metrics.SaveGauge(ctx, name, value); err != nil {
+		return err
+	}
+
+	s.flush(ctx)
+
+	return nil
 }
 
-func (s *syncStorage) AddCounter(name string, value int64) {
-	s.Metrics.AddCounter(name, value)
-	s.flush()
+func (s *syncStorage) AddCounter(ctx context.Context, name string, value int64) error {
+	if err := s.Metrics.AddCounter(ctx, name, value); err != nil {
+		return err
+	}
+
+	s.flush(ctx)
+
+	return nil
 }
 
-func (s *syncStorage) flush() {
-	if err := s.file.save(); err != nil {
+// SaveBatch сбрасывает дамп один раз на весь пакет, а не на каждую метрику.
+func (s *syncStorage) SaveBatch(ctx context.Context, metrics []model.Metrics) error {
+	if err := s.Metrics.SaveBatch(ctx, metrics); err != nil {
+		return err
+	}
+
+	s.flush(ctx)
+
+	return nil
+}
+
+// flush не возвращает ошибку: метрика уже принята хранилищем, и отвечать
+// клиенту отказом из-за недоступного диска не за что.
+func (s *syncStorage) flush(ctx context.Context) {
+	if err := s.file.save(ctx); err != nil {
 		s.l.Error("failed to save metrics", slog.Any("error", err))
 	}
 }
