@@ -25,7 +25,7 @@ func New(pinger Pinger, l *slog.Logger) http.HandlerFunc {
 
 		if err := pinger.PingContext(ctx); err != nil {
 			l.Error("ping: database is unavailable", slog.Any("error", err))
-			http.Error(w, "database is unavailable", http.StatusInternalServerError)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
