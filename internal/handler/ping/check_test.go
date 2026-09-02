@@ -34,9 +34,10 @@ func TestNew(t *testing.T) {
 			expectedStatus: http.StatusInternalServerError,
 		},
 		{
+			// Необязательный компонент не повод объявлять сервис нездоровым.
 			name:           "database is not configured",
 			pinger:         nil,
-			expectedStatus: http.StatusInternalServerError,
+			expectedStatus: http.StatusOK,
 		},
 	}
 

@@ -7,21 +7,16 @@ import (
 	"time"
 )
 
-// timeout ограничивает проверку: недоступная база не должна держать запрос
-// до истечения собственных таймаутов драйвера.
 const timeout = 3 * time.Second
 
 type Pinger interface {
 	PingContext(ctx context.Context) error
 }
 
-// New возвращает хендлер проверки соединения с базой. Если база не
-// сконфигурирована, pinger равен nil и проверка считается неуспешной.
 func New(pinger Pinger, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if pinger == nil {
-			l.Error("ping: database is not configured")
-			http.Error(w, "database is not configured", http.StatusInternalServerError)
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 
