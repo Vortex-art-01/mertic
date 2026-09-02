@@ -11,12 +11,14 @@ var (
 	flagRunAddr        string
 	flagReportInterval int64
 	flagPollInterval   int64
+	flagKey            string
 )
 
 func parseFlags() {
 	flag.StringVar(&flagRunAddr, "a", "localhost:8080", "адрес эндпоинта HTTP-сервера")
 	flag.Int64Var(&flagReportInterval, "r", 10, "частота отправки метрик на сервер, сек")
 	flag.Int64Var(&flagPollInterval, "p", 2, "частота опроса метрик из пакета runtime, сек")
+	flag.StringVar(&flagKey, "k", "", "ключ подписи передаваемых данных (пустой — не подписывать)")
 
 	flag.Parse()
 
@@ -42,5 +44,9 @@ func parseFlags() {
 		}
 
 		flagPollInterval = v
+	}
+
+	if env, ok := os.LookupEnv("KEY"); ok {
+		flagKey = env
 	}
 }

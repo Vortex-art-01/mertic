@@ -26,9 +26,10 @@ func main() {
 		slog.String("server_address", flagRunAddr),
 		slog.String("poll_interval", pollInterval.String()),
 		slog.String("report_interval", reportInterval.String()),
+		slog.Bool("signed", flagKey != ""),
 	)
 
-	client := agent.NewClient("http://" + flagRunAddr)
+	client := agent.NewClient("http://"+flagRunAddr, flagKey)
 	a := agent.New(client, pollInterval, reportInterval, l)
 	a.Run(ctx)
 
