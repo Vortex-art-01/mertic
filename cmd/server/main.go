@@ -48,24 +48,17 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 
 	var (
 		storage metricsStorage
-		// Без DSN база не нужна: pinger остаётся nil, и GET /ping отвечает 500.
-		pinger ping.Pinger
-		// dumps остаётся nil, когда метрики лежат в базе: файловый дамп
-		// в этом режиме не ведётся.
-		dumps io.Closer
+		pinger  ping.Pinger
+		dumps   io.Closer
 	)
 
 	switch {
 	case cfg.databaseDSN != "":
-		db, err := database.New(cfg.databaseDSN)
+		db, err := database.New(ctx, cfg.databaseDSN)
 		if err != nil {
 			return err
 		}
 		defer closeDB(db, l)
-
-		if err := database.Migrate(ctx, db); err != nil {
-			return err
-		}
 
 		l.Info("database schema is up to date")
 
@@ -107,8 +100,6 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 
 	<-shutdownDone
 
-	// Дамп дописывается только после штатной остановки: если сервер даже
-	// не поднялся, пустое хранилище затёрло бы уже сохранённые метрики.
 	if dumps != nil {
 		if err := dumps.Close(); err != nil {
 			return err
@@ -120,8 +111,6 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 	return nil
 }
 
-// storageKind называет выбранное хранилище — порядок отката тот же, что и в
-// условиях выбора: база, файл, память.
 func storageKind(cfg config) string {
 	switch {
 	case cfg.databaseDSN != "":
@@ -153,8 +142,6 @@ func newRouter(repo metricsStorage, pinger ping.Pinger, l *slog.Logger) http.Han
 	r.Get("/ping", ping.New(pinger, l))
 	r.Get("/value/{type}/{name}", value.New(repo, l))
 
-	// Варианты с завершающим слешем регистрируются явно:
-	// chi не сопоставляет "/update/" с маршрутом "/update".
 	r.Post("/update", updateJSON)
 	r.Post("/update/", updateJSON)
 	r.Post("/updates", updatesJSON)

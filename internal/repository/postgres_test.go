@@ -25,7 +25,7 @@ func newPostgres(t *testing.T) (*repository.Postgres, *sql.DB) {
 		t.Skip("TEST_DATABASE_DSN is not set")
 	}
 
-	db, err := database.New(dsn)
+	db, err := database.New(t.Context(), dsn)
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
@@ -34,10 +34,6 @@ func newPostgres(t *testing.T) (*repository.Postgres, *sql.DB) {
 			t.Errorf("failed to close database: %v", err)
 		}
 	})
-
-	if err := database.Migrate(t.Context(), db); err != nil {
-		t.Fatalf("failed to migrate: %v", err)
-	}
 
 	return repository.NewPostgres(db), db
 }

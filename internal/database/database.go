@@ -18,20 +18,13 @@ import (
 )
 
 const (
-	maxOpenConns    = 10          // всего соединений (in-use + idle)
-	maxIdleConns    = 5           // сколько свободных держим открытыми
-	connMaxIdleTime = time.Minute // как долго свободное соединение живёт
-
-	// connectTimeout ограничивает одну попытку подключения: недоступный
-	// сервер не должен держать запуск до истечения таймаутов драйвера.
-	connectTimeout = 5 * time.Second
+	maxOpenConns    = 10
+	maxIdleConns    = 5
+	connMaxIdleTime = time.Minute
+	connectTimeout  = 5 * time.Second
 )
 
-// New готовит пул соединений. Ни разбор DSN, ни подключение здесь не
-// происходят — драйвер откладывает их до первого запроса, поэтому неверная
-// строка подключения или недоступная база выяснятся только в Migrate или
-// в хендлере GET /ping.
-func New(dsn string) (*sql.DB, error) {
+func New(ctx context.Context, dsn string) (*sql.DB, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
@@ -41,17 +34,25 @@ func New(dsn string) (*sql.DB, error) {
 	db.SetMaxIdleConns(maxIdleConns)
 	db.SetConnMaxIdleTime(connMaxIdleTime)
 
+	if err := prepare(ctx, db); err != nil {
+		_ = db.Close()
+
+		return nil, err
+	}
+
 	return db, nil
 }
 
-func Migrate(ctx context.Context, db *sql.DB) error {
+func prepare(ctx context.Context, db *sql.DB) error {
 	if err := connect(ctx, db); err != nil {
 		return fmt.Errorf("connect to database: %w", err)
 	}
 
+	return migrate(ctx, db)
+}
+
+func migrate(ctx context.Context, db *sql.DB) error {
 	goose.SetBaseFS(migrations.FS)
-	// Лог goose уходит в никуда: о результате сервер пишет сам, а os.Stdout
-	// занят структурированным логом.
 	goose.SetLogger(goose.NopLogger())
 
 	if err := goose.SetDialect("postgres"); err != nil {

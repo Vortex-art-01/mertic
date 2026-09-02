@@ -10,7 +10,7 @@ import (
 )
 
 // Проверка без базы: миграции лежат во встроенной ФС, и goose находит их по
-// тому же пути, который использует Migrate. Опечатка в go:embed или в имени
+// тому же пути, который использует migrate. Опечатка в go:embed или в имени
 // каталога иначе всплыла бы только на живой базе.
 func TestMigrationsAreCollected(t *testing.T) {
 	goose.SetBaseFS(migrations.FS)
