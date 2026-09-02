@@ -22,8 +22,6 @@ type recordedRequest struct {
 	body            []byte
 }
 
-// decode разбирает записанное тело в переданную структуру: у одиночной
-// отправки это Metrics, у пакетной — []Metrics.
 func (r recordedRequest) decode(t *testing.T, v any) {
 	t.Helper()
 
@@ -134,81 +132,6 @@ func TestClientSendBatchErrorStatus(t *testing.T) {
 	}
 }
 
-func TestClientSendGauge(t *testing.T) {
-	client, requests := newTestServer(t, http.StatusOK)
-
-	if err := client.SendGauge(t.Context(), "Alloc", 123.45); err != nil {
-		t.Fatalf("SendGauge: %v", err)
-	}
-
-	if len(*requests) != 1 {
-		t.Fatalf("got %d requests, want 1", len(*requests))
-	}
-	req := (*requests)[0]
-	if req.method != http.MethodPost {
-		t.Errorf("method = %s, want POST", req.method)
-	}
-	if want := "/update"; req.path != want {
-		t.Errorf("path = %s, want %s", req.path, want)
-	}
-	if req.contentType != "application/json" {
-		t.Errorf("Content-Type = %q, want %q", req.contentType, "application/json")
-	}
-	if req.contentEncoding != "gzip" {
-		t.Errorf("Content-Encoding = %q, want %q", req.contentEncoding, "gzip")
-	}
-
-	var got model.Metrics
-	req.decode(t, &got)
-
-	if got.ID != "Alloc" || got.MType != model.Gauge {
-		t.Errorf("body = %+v, want id Alloc of type gauge", got)
-	}
-	if got.Value == nil || *got.Value != 123.45 {
-		t.Errorf("body value = %v, want 123.45", got.Value)
-	}
-	if got.Delta != nil {
-		t.Errorf("body delta = %v, want nil for gauge", *got.Delta)
-	}
-}
-
-func TestClientSendCounter(t *testing.T) {
-	client, requests := newTestServer(t, http.StatusOK)
-
-	if err := client.SendCounter(t.Context(), "PollCount", 5); err != nil {
-		t.Fatalf("SendCounter: %v", err)
-	}
-
-	if len(*requests) != 1 {
-		t.Fatalf("got %d requests, want 1", len(*requests))
-	}
-	req := (*requests)[0]
-	if want := "/update"; req.path != want {
-		t.Errorf("path = %s, want %s", req.path, want)
-	}
-
-	var got model.Metrics
-	req.decode(t, &got)
-
-	if got.ID != "PollCount" || got.MType != model.Counter {
-		t.Errorf("body = %+v, want id PollCount of type counter", got)
-	}
-	if got.Delta == nil || *got.Delta != 5 {
-		t.Errorf("body delta = %v, want 5", got.Delta)
-	}
-	if got.Value != nil {
-		t.Errorf("body value = %v, want nil for counter", *got.Value)
-	}
-}
-
-func TestClientSendErrorStatus(t *testing.T) {
-	client, _ := newTestServer(t, http.StatusBadRequest)
-
-	if err := client.SendGauge(t.Context(), "Alloc", 1); err == nil {
-		t.Error("expected error on non-200 response, got nil")
-	}
-}
-
 // newTestClient — клиент с теми же повторами, но без настоящих пауз между
 // ними: проверять расписание задержек — дело тестов пакета retry.
 func newTestClient(baseURL string) *Client {
@@ -299,7 +222,10 @@ func TestClientDoesNotRetryBadRequest(t *testing.T) {
 func TestClientRetriesUnreachableServer(t *testing.T) {
 	client := newTestClient("http://127.0.0.1:1") // заведомо недоступный адрес
 
-	err := client.SendGauge(t.Context(), "Alloc", 1)
+	value := 1.0
+	batch := []model.Metrics{{ID: "Alloc", MType: model.Gauge, Value: &value}}
+
+	err := client.SendBatch(t.Context(), batch)
 	if err == nil {
 		t.Fatal("expected error when server is unreachable, got nil")
 	}
@@ -318,7 +244,10 @@ func TestClientStopsRetryingOnCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	if err := client.SendGauge(ctx, "Alloc", 1); err == nil {
+	value := 1.0
+	batch := []model.Metrics{{ID: "Alloc", MType: model.Gauge, Value: &value}}
+
+	if err := client.SendBatch(ctx, batch); err == nil {
 		t.Fatal("expected error on canceled context, got nil")
 	}
 

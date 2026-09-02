@@ -45,27 +45,6 @@ func (c *Client) SendBatch(ctx context.Context, metrics []model.Metrics) error {
 	return nil
 }
 
-func (c *Client) SendGauge(ctx context.Context, name string, value float64) error {
-	return c.send(ctx, model.Metrics{ID: name, MType: model.Gauge, Value: &value})
-}
-
-func (c *Client) SendCounter(ctx context.Context, name string, delta int64) error {
-	return c.send(ctx, model.Metrics{ID: name, MType: model.Counter, Delta: &delta})
-}
-
-func (c *Client) send(ctx context.Context, m model.Metrics) error {
-	body, err := json.Marshal(m)
-	if err != nil {
-		return fmt.Errorf("marshal %s %s: %w", m.MType, m.ID, err)
-	}
-
-	if err := c.post(ctx, "/update", body); err != nil {
-		return fmt.Errorf("send %s %s: %w", m.MType, m.ID, err)
-	}
-
-	return nil
-}
-
 func gzipped(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
 
