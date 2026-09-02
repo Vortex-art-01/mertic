@@ -1,11 +1,13 @@
 package repository_test
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Vortex-art-01/mertic/internal/database"
 	"github.com/Vortex-art-01/mertic/internal/model"
@@ -17,7 +19,7 @@ import (
 // оставлять SQL непроверенным — тоже.
 //
 //	TEST_DATABASE_DSN='postgres://postgres:postgres@localhost:5432/praktikum?sslmode=disable' go test ./internal/repository/
-func newPostgres(t *testing.T) (*repository.Postgres, *sql.DB) {
+func newPostgres(t *testing.T) (*repository.Postgres, *pgxpool.Pool) {
 	t.Helper()
 
 	dsn := os.Getenv("TEST_DATABASE_DSN")
@@ -25,28 +27,25 @@ func newPostgres(t *testing.T) (*repository.Postgres, *sql.DB) {
 		t.Skip("TEST_DATABASE_DSN is not set")
 	}
 
-	db, err := database.New(t.Context(), dsn)
+	pool, err := database.New(t.Context(), dsn)
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Errorf("failed to close database: %v", err)
-		}
-	})
+	t.Cleanup(pool.Close)
 
-	return repository.NewPostgres(db), db
+	return repository.NewPostgres(pool), pool
 }
 
 // uniqueName разводит параллельные и повторные прогоны по разным строкам:
 // база одна на всех, и общая таблица не чистится между тестами.
-func uniqueName(t *testing.T, db *sql.DB, table string) string {
+func uniqueName(t *testing.T, pool *pgxpool.Pool, table string) string {
 	t.Helper()
 
 	name := fmt.Sprintf("%s-%d", t.Name(), time.Now().UnixNano())
 
 	t.Cleanup(func() {
-		if _, err := db.Exec(`DELETE FROM `+table+` WHERE name = $1`, name); err != nil {
+		// Контекст теста к этому моменту уже отменён, а строку убрать надо.
+		if _, err := pool.Exec(context.Background(), `DELETE FROM `+table+` WHERE name = $1`, name); err != nil {
 			t.Errorf("failed to clean up %s: %v", name, err)
 		}
 	})
@@ -55,8 +54,8 @@ func uniqueName(t *testing.T, db *sql.DB, table string) string {
 }
 
 func TestPostgresKeepsLastGauge(t *testing.T) {
-	storage, db := newPostgres(t)
-	name := uniqueName(t, db, "gauges")
+	storage, pool := newPostgres(t)
+	name := uniqueName(t, pool, "gauges")
 
 	for _, want := range []float64{1.5, 2.25} {
 		if err := storage.SaveGauge(t.Context(), name, want); err != nil {
@@ -75,8 +74,8 @@ func TestPostgresKeepsLastGauge(t *testing.T) {
 
 // Приращения складывает база: сервер их не читает и не перезаписывает.
 func TestPostgresAccumulatesCounter(t *testing.T) {
-	storage, db := newPostgres(t)
-	name := uniqueName(t, db, "counters")
+	storage, pool := newPostgres(t)
+	name := uniqueName(t, pool, "counters")
 
 	for _, delta := range []int64{3, 4} {
 		if err := storage.AddCounter(t.Context(), name, delta); err != nil {
@@ -106,9 +105,9 @@ func TestPostgresMissingMetric(t *testing.T) {
 }
 
 func TestPostgresListsMetrics(t *testing.T) {
-	storage, db := newPostgres(t)
-	gaugeName := uniqueName(t, db, "gauges")
-	counterName := uniqueName(t, db, "counters")
+	storage, pool := newPostgres(t)
+	gaugeName := uniqueName(t, pool, "gauges")
+	counterName := uniqueName(t, pool, "counters")
 
 	if err := storage.SaveGauge(t.Context(), gaugeName, 10.5); err != nil {
 		t.Fatalf("SaveGauge() error = %v", err)
@@ -137,9 +136,9 @@ func TestPostgresListsMetrics(t *testing.T) {
 // SaveBatch пишет весь пакет за одну транзакцию: gauge перезаписывается,
 // приращения counter складываются с тем, что уже лежит в базе.
 func TestPostgresSaveBatch(t *testing.T) {
-	storage, db := newPostgres(t)
-	gaugeName := uniqueName(t, db, "gauges")
-	counterName := uniqueName(t, db, "counters")
+	storage, pool := newPostgres(t)
+	gaugeName := uniqueName(t, pool, "gauges")
+	counterName := uniqueName(t, pool, "counters")
 
 	if err := storage.AddCounter(t.Context(), counterName, 2); err != nil {
 		t.Fatalf("AddCounter() error = %v", err)
@@ -166,9 +165,9 @@ func TestPostgresSaveBatch(t *testing.T) {
 // Повторы внутри пакета — обычное дело: многострочный INSERT ... ON CONFLICT
 // не может изменить одну строку дважды, поэтому имена схлопываются заранее.
 func TestPostgresSaveBatchWithRepeatedNames(t *testing.T) {
-	storage, db := newPostgres(t)
-	gaugeName := uniqueName(t, db, "gauges")
-	counterName := uniqueName(t, db, "counters")
+	storage, pool := newPostgres(t)
+	gaugeName := uniqueName(t, pool, "gauges")
+	counterName := uniqueName(t, pool, "counters")
 
 	first, last := 1.5, 2.25
 	one, two := int64(4), int64(6)

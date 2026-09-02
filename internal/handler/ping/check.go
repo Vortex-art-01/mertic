@@ -10,7 +10,7 @@ import (
 const timeout = 3 * time.Second
 
 type Pinger interface {
-	PingContext(ctx context.Context) error
+	Ping(ctx context.Context) error
 }
 
 func New(pinger Pinger, l *slog.Logger) http.HandlerFunc {
@@ -23,7 +23,7 @@ func New(pinger Pinger, l *slog.Logger) http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 
-		if err := pinger.PingContext(ctx); err != nil {
+		if err := pinger.Ping(ctx); err != nil {
 			l.Error("ping: database is unavailable", slog.Any("error", err))
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return

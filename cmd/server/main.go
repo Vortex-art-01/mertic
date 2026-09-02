@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"io"
 	"log"
@@ -54,15 +53,15 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 
 	switch {
 	case cfg.databaseDSN != "":
-		db, err := database.New(ctx, cfg.databaseDSN)
+		pool, err := database.New(ctx, cfg.databaseDSN)
 		if err != nil {
 			return err
 		}
-		defer closeDB(db, l)
+		defer pool.Close()
 
 		l.Info("database schema is up to date")
 
-		storage, pinger = repository.NewPostgres(db), db
+		storage, pinger = repository.NewPostgres(pool), pool
 	default:
 		storage, dumps = dump.Attach(ctx, repository.NewMemStorage(), dump.Config{
 			Path:     cfg.fileStorage,
@@ -119,12 +118,6 @@ func storageKind(cfg config) string {
 		return "file"
 	default:
 		return "memory"
-	}
-}
-
-func closeDB(db *sql.DB, l *slog.Logger) {
-	if err := db.Close(); err != nil {
-		l.Error("failed to close database", slog.Any("error", err))
 	}
 }
 

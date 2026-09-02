@@ -13,7 +13,7 @@ type mockPinger struct {
 	err error
 }
 
-func (m mockPinger) PingContext(ctx context.Context) error {
+func (m mockPinger) Ping(ctx context.Context) error {
 	return m.err
 }
 
@@ -89,6 +89,6 @@ func TestNewLimitsPingTime(t *testing.T) {
 
 type funcPinger func(ctx context.Context) error
 
-func (f funcPinger) PingContext(ctx context.Context) error {
+func (f funcPinger) Ping(ctx context.Context) error {
 	return f(ctx)
 }

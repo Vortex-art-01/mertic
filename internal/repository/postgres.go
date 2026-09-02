@@ -2,11 +2,13 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"maps"
 	"slices"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Vortex-art-01/mertic/internal/model"
 	"github.com/Vortex-art-01/mertic/internal/pgerrors"
@@ -14,11 +16,11 @@ import (
 )
 
 type Postgres struct {
-	db *sql.DB
+	pool *pgxpool.Pool
 }
 
-func NewPostgres(db *sql.DB) *Postgres {
-	return &Postgres{db: db}
+func NewPostgres(pool *pgxpool.Pool) *Postgres {
+	return &Postgres{pool: pool}
 }
 
 func (p *Postgres) SaveGauge(ctx context.Context, name string, value float64) error {
@@ -47,7 +49,7 @@ func (p *Postgres) AddCounter(ctx context.Context, name string, value int64) err
 
 func (p *Postgres) exec(ctx context.Context, query string, args ...any) error {
 	return retry.Do(ctx, pgerrors.Retriable, func() error {
-		_, err := p.db.ExecContext(ctx, query, args...)
+		_, err := p.pool.Exec(ctx, query, args...)
 		return err
 	})
 }
@@ -69,13 +71,11 @@ func (p *Postgres) SaveBatch(ctx context.Context, metrics []model.Metrics) error
 }
 
 func (p *Postgres) saveBatch(ctx context.Context, gauges map[string]float64, counters map[string]int64) error {
-	tx, err := p.db.BeginTx(ctx, nil)
+	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	// Откат после успешного Commit — уже не операция: база вернёт
-	// sql.ErrTxDone, и ошибка здесь ничего не значит.
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	if err := saveGauges(ctx, tx, gauges); err != nil {
 		return err
@@ -85,10 +85,10 @@ func (p *Postgres) saveBatch(ctx context.Context, gauges map[string]float64, cou
 		return err
 	}
 
-	return tx.Commit()
+	return tx.Commit(ctx)
 }
 
-func saveGauges(ctx context.Context, tx *sql.Tx, gauges map[string]float64) error {
+func saveGauges(ctx context.Context, tx pgx.Tx, gauges map[string]float64) error {
 	if len(gauges) == 0 {
 		return nil
 	}
@@ -104,14 +104,14 @@ func saveGauges(ctx context.Context, tx *sql.Tx, gauges map[string]float64) erro
 		values[i] = gauges[name]
 	}
 
-	if _, err := tx.ExecContext(ctx, query, names, values); err != nil {
+	if _, err := tx.Exec(ctx, query, names, values); err != nil {
 		return fmt.Errorf("save gauges batch: %w", err)
 	}
 
 	return nil
 }
 
-func addCounters(ctx context.Context, tx *sql.Tx, counters map[string]int64) error {
+func addCounters(ctx context.Context, tx pgx.Tx, counters map[string]int64) error {
 	if len(counters) == 0 {
 		return nil
 	}
@@ -127,7 +127,7 @@ func addCounters(ctx context.Context, tx *sql.Tx, counters map[string]int64) err
 		deltas[i] = counters[name]
 	}
 
-	if _, err := tx.ExecContext(ctx, query, names, deltas); err != nil {
+	if _, err := tx.Exec(ctx, query, names, deltas); err != nil {
 		return fmt.Errorf("add counters batch: %w", err)
 	}
 
@@ -160,11 +160,11 @@ func (p *Postgres) GetGauge(ctx context.Context, name string) (float64, bool, er
 	var value float64
 
 	err := retry.Do(ctx, pgerrors.Retriable, func() error {
-		return p.db.QueryRowContext(ctx, query, name).Scan(&value)
+		return p.pool.QueryRow(ctx, query, name).Scan(&value)
 	})
 
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
+	case errors.Is(err, pgx.ErrNoRows):
 		return 0, false, nil
 	case err != nil:
 		return 0, false, fmt.Errorf("get gauge %s: %w", name, err)
@@ -179,11 +179,11 @@ func (p *Postgres) GetCounter(ctx context.Context, name string) (int64, bool, er
 	var delta int64
 
 	err := retry.Do(ctx, pgerrors.Retriable, func() error {
-		return p.db.QueryRowContext(ctx, query, name).Scan(&delta)
+		return p.pool.QueryRow(ctx, query, name).Scan(&delta)
 	})
 
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
+	case errors.Is(err, pgx.ErrNoRows):
 		return 0, false, nil
 	case err != nil:
 		return 0, false, fmt.Errorf("get counter %s: %w", name, err)
@@ -198,7 +198,7 @@ func (p *Postgres) Gauges(ctx context.Context) (map[string]float64, error) {
 	var gauges map[string]float64
 
 	err := retry.Do(ctx, pgerrors.Retriable, func() error {
-		rows, err := p.db.QueryContext(ctx, query)
+		rows, err := p.pool.Query(ctx, query)
 		if err != nil {
 			return err
 		}
@@ -232,7 +232,7 @@ func (p *Postgres) Counters(ctx context.Context) (map[string]int64, error) {
 	var counters map[string]int64
 
 	err := retry.Do(ctx, pgerrors.Retriable, func() error {
-		rows, err := p.db.QueryContext(ctx, query)
+		rows, err := p.pool.Query(ctx, query)
 		if err != nil {
 			return err
 		}

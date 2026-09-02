@@ -4,13 +4,12 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
-
-	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/Vortex-art-01/mertic/internal/pgerrors"
 	"github.com/Vortex-art-01/mertic/internal/retry"
@@ -18,40 +17,48 @@ import (
 )
 
 const (
-	maxOpenConns    = 10
-	maxIdleConns    = 5
-	connMaxIdleTime = time.Minute
+	maxConns        = 10
+	minIdleConns    = 5
+	maxConnIdleTime = time.Minute
 	connectTimeout  = 5 * time.Second
 )
 
-func New(ctx context.Context, dsn string) (*sql.DB, error) {
-	db, err := sql.Open("pgx", dsn)
+func New(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
+		return nil, fmt.Errorf("parse database dsn: %w", err)
 	}
 
-	db.SetMaxOpenConns(maxOpenConns)
-	db.SetMaxIdleConns(maxIdleConns)
-	db.SetConnMaxIdleTime(connMaxIdleTime)
+	cfg.MaxConns = maxConns
+	cfg.MinIdleConns = minIdleConns
+	cfg.MaxConnIdleTime = maxConnIdleTime
 
-	if err := prepare(ctx, db); err != nil {
-		_ = db.Close()
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("create connection pool: %w", err)
+	}
+
+	if err := prepare(ctx, pool); err != nil {
+		pool.Close()
 
 		return nil, err
 	}
 
-	return db, nil
+	return pool, nil
 }
 
-func prepare(ctx context.Context, db *sql.DB) error {
-	if err := connect(ctx, db); err != nil {
+func prepare(ctx context.Context, pool *pgxpool.Pool) error {
+	if err := connect(ctx, pool); err != nil {
 		return fmt.Errorf("connect to database: %w", err)
 	}
 
-	return migrate(ctx, db)
+	return migrate(ctx, pool)
 }
 
-func migrate(ctx context.Context, db *sql.DB) error {
+func migrate(ctx context.Context, pool *pgxpool.Pool) error {
+	db := stdlib.OpenDBFromPool(pool)
+	defer func() { _ = db.Close() }()
+
 	goose.SetBaseFS(migrations.FS)
 	goose.SetLogger(goose.NopLogger())
 
@@ -66,12 +73,11 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func connect(ctx context.Context, db *sql.DB) error {
+func connect(ctx context.Context, pool *pgxpool.Pool) error {
 	return retry.Do(ctx, pgerrors.Retriable, func() error {
-		// Таймаут отсчитывается заново на каждой попытке.
 		connectCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 		defer cancel()
 
-		return db.PingContext(connectCtx)
+		return pool.Ping(connectCtx)
 	})
 }
