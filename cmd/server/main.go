@@ -70,7 +70,7 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 		}, l)
 	}
 
-	srv := &http.Server{Addr: cfg.runAddr, Handler: newRouter(storage, pinger, l)}
+	srv := &http.Server{Addr: cfg.runAddr, Handler: newRouter(storage, pinger, cfg.key, l)}
 
 	shutdownDone := make(chan struct{})
 	go func() {
@@ -91,7 +91,8 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 		slog.String("storage", storageKind(cfg)),
 		slog.String("file", cfg.fileStorage),
 		slog.Duration("store interval", cfg.storeInterval),
-		slog.Bool("restore", cfg.restore))
+		slog.Bool("restore", cfg.restore),
+		slog.Bool("signed", cfg.key != ""))
 
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -121,11 +122,12 @@ func storageKind(cfg config) string {
 	}
 }
 
-func newRouter(repo metricsStorage, pinger ping.Pinger, l *slog.Logger) http.Handler {
+func newRouter(repo metricsStorage, pinger ping.Pinger, key string, l *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.WithLogging(l))
 	r.Use(middleware.WithGzip)
+	r.Use(middleware.WithHash(key))
 
 	updateJSON := updatejson.New(repo, l)
 	updatesJSON := updatesjson.New(repo, l)
