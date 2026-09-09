@@ -12,6 +12,7 @@ var (
 	flagReportInterval int64
 	flagPollInterval   int64
 	flagKey            string
+	flagRateLimit      int
 )
 
 func parseFlags() {
@@ -19,6 +20,7 @@ func parseFlags() {
 	flag.Int64Var(&flagReportInterval, "r", 10, "частота отправки метрик на сервер, сек")
 	flag.Int64Var(&flagPollInterval, "p", 2, "частота опроса метрик из пакета runtime, сек")
 	flag.StringVar(&flagKey, "k", "", "ключ подписи передаваемых данных (пустой — не подписывать)")
+	flag.IntVar(&flagRateLimit, "l", 1, "количество одновременно исходящих запросов на сервер")
 
 	flag.Parse()
 
@@ -48,5 +50,15 @@ func parseFlags() {
 
 	if env, ok := os.LookupEnv("KEY"); ok {
 		flagKey = env
+	}
+
+	if env, ok := os.LookupEnv("RATE_LIMIT"); ok {
+		v, err := strconv.Atoi(env)
+
+		if err != nil {
+			panic(fmt.Sprintf("Parse error RATE_LIMIT: %s", err))
+		}
+
+		flagRateLimit = v
 	}
 }
