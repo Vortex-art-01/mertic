@@ -202,7 +202,8 @@ func TestNewRejectsInvalidRequests(t *testing.T) {
 }
 
 func TestNewDoesNotLogSuccess(t *testing.T) {
-	_, logs := do(t, newMockStorage(), `{"id":"Alloc","type":"gauge","value":1}`)
+	res, logs := do(t, newMockStorage(), `{"id":"Alloc","type":"gauge","value":1}`)
+	defer res.Body.Close()
 
 	if logs != "" {
 		t.Errorf("successful update must not log, got:\n%s", logs)
