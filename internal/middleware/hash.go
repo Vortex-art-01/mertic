@@ -23,6 +23,8 @@ func WithHash(key string) func(http.Handler) http.Handler {
 
 			r.Body = io.NopCloser(bytes.NewReader(body))
 
+			// Подпись проверяется, только если клиент её прислал: политика
+			// «кто подписал, того и проверяем» описана у hash.None.
 			if got := r.Header.Get(hash.Header); got != "" && got != hash.None {
 				if !hash.Valid(body, key, got) {
 					http.Error(w, "invalid hash", http.StatusBadRequest)

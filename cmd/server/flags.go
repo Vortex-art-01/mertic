@@ -32,7 +32,8 @@ func parseFlags() config {
 	flag.StringVar(&fileStorage, "f", "/tmp/metrics-db.json", "путь до файла с сохранёнными метриками")
 	flag.BoolVar(&restore, "r", true, "загружать ранее сохранённые метрики при старте")
 	flag.StringVar(&databaseDSN, "d", "", "строка подключения к базе данных PostgreSQL")
-	flag.StringVar(&key, "k", "", "ключ подписи передаваемых данных (пустой — не подписывать)")
+	flag.StringVar(&key, "k", "",
+		"ключ подписи данных (пустой — не подписывать; с ключом сервер проверяет только запросы с подписью)")
 
 	flag.Parse()
 
