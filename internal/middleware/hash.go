@@ -39,8 +39,8 @@ func WithHash(key string) func(http.Handler) http.Handler {
 
 // hashWriter копит ответ целиком в памяти: подпись считается по всему телу,
 // поэтому отдать его раньше, чем хендлер отработает, нельзя. Цена решения —
-// нет стриминга (клиент не увидит ни байта до конца обработки), нет
-// http.Flusher, а расход памяти растёт вместе с размером ответа. Для ответов
+// нет стриминга (клиент не увидит ни байта до конца обработки, см.
+// FlushError), а расход памяти растёт вместе с размером ответа. Для ответов
 // сервиса — JSON с метриками в единицы килобайт — это осознанный компромисс;
 // для большого или потокового ответа такую подпись придётся пересматривать.
 type hashWriter struct {
@@ -48,6 +48,14 @@ type hashWriter struct {
 	key    string
 	status int
 	body   bytes.Buffer
+}
+
+func (w *hashWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func (w *hashWriter) FlushError() error {
+	return http.ErrNotSupported
 }
 
 func (w *hashWriter) WriteHeader(status int) {
