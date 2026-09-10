@@ -92,6 +92,17 @@ func TestWithHashAcceptsUnsignedRequests(t *testing.T) {
 		called := false
 		handler := WithHash(testKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			called = true
+
+			// Мидлварь беззнаковое тело не читает, но хендлеру оно
+			// по-прежнему должно доставаться целиком.
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("failed to read body: %v", err)
+			}
+			if string(raw) != testBody {
+				t.Errorf("%s=%q: handler got body %q, want %q", hash.Header, sign, raw, testBody)
+			}
+
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		}))
 

@@ -15,17 +15,17 @@ func WithHash(key string) func(http.Handler) http.Handler {
 		}
 
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				http.Error(w, "failed to read request body", http.StatusBadRequest)
-				return
-			}
-
-			r.Body = io.NopCloser(bytes.NewReader(body))
-
 			// Подпись проверяется, только если клиент её прислал: политика
-			// «кто подписал, того и проверяем» описана у hash.None.
+			// «кто подписал, того и проверяем» описана у hash.None
 			if got := r.Header.Get(hash.Header); got != "" && got != hash.None {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					http.Error(w, "failed to read request body", http.StatusBadRequest)
+					return
+				}
+
+				r.Body = io.NopCloser(bytes.NewReader(body))
+
 				if !hash.Valid(body, key, got) {
 					http.Error(w, "invalid hash", http.StatusBadRequest)
 					return
