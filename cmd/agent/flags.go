@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -9,60 +10,55 @@ import (
 
 var (
 	flagRunAddr        string
-	flagReportInterval int64
-	flagPollInterval   int64
+	flagReportInterval int
+	flagPollInterval   int
 	flagKey            string
 	flagRateLimit      int
 )
 
 func parseFlags() error {
 	flag.StringVar(&flagRunAddr, "a", "localhost:8080", "адрес эндпоинта HTTP-сервера")
-	flag.Int64Var(&flagReportInterval, "r", 10, "частота отправки метрик на сервер, сек (минимум 1)")
-	flag.Int64Var(&flagPollInterval, "p", 2, "частота опроса метрик из пакета runtime, сек (минимум 1)")
+	flag.IntVar(&flagReportInterval, "r", 10, "частота отправки метрик на сервер, сек (минимум 1)")
+	flag.IntVar(&flagPollInterval, "p", 2, "частота опроса метрик из пакета runtime, сек (минимум 1)")
 	flag.StringVar(&flagKey, "k", "", "ключ подписи передаваемых данных (пустой — не подписывать)")
 	flag.IntVar(&flagRateLimit, "l", 1, "количество одновременно исходящих запросов на сервер (минимум 1)")
 
 	flag.Parse()
 
-	if env, ok := os.LookupEnv("ADDRESS"); ok {
-		flagRunAddr = env
-	}
+	envString("ADDRESS", &flagRunAddr)
+	envString("KEY", &flagKey)
 
-	if env, ok := os.LookupEnv("REPORT_INTERVAL"); ok {
-		v, err := strconv.ParseInt(env, 10, 64)
-
-		if err != nil {
-			return fmt.Errorf("некорректное значение REPORT_INTERVAL: %w", err)
-		}
-
-		flagReportInterval = v
-	}
-
-	if env, ok := os.LookupEnv("POLL_INTERVAL"); ok {
-		v, err := strconv.ParseInt(env, 10, 64)
-
-		if err != nil {
-			return fmt.Errorf("некорректное значение POLL_INTERVAL: %w", err)
-		}
-
-		flagPollInterval = v
-	}
-
-	if env, ok := os.LookupEnv("KEY"); ok {
-		flagKey = env
-	}
-
-	if env, ok := os.LookupEnv("RATE_LIMIT"); ok {
-		v, err := strconv.Atoi(env)
-
-		if err != nil {
-			return fmt.Errorf("некорректное значение RATE_LIMIT: %w", err)
-		}
-
-		flagRateLimit = v
+	if err := errors.Join(
+		envInt("REPORT_INTERVAL", &flagReportInterval),
+		envInt("POLL_INTERVAL", &flagPollInterval),
+		envInt("RATE_LIMIT", &flagRateLimit),
+	); err != nil {
+		return err
 	}
 
 	return validateFlags()
+}
+
+func envString(name string, dst *string) {
+	if v, ok := os.LookupEnv(name); ok {
+		*dst = v
+	}
+}
+
+func envInt(name string, dst *int) error {
+	raw, ok := os.LookupEnv(name)
+	if !ok {
+		return nil
+	}
+
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return fmt.Errorf("некорректное значение %s: %w", name, err)
+	}
+
+	*dst = v
+
+	return nil
 }
 
 func validateFlags() error {
