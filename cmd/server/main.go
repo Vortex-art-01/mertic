@@ -70,7 +70,12 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 		}, l)
 	}
 
-	srv := &http.Server{Addr: cfg.runAddr, Handler: newRouter(storage, pinger, cfg.key, l)}
+	srv := &http.Server{Addr: cfg.runAddr, Handler: newRouter(routerDeps{
+		storage: storage,
+		pinger:  pinger,
+		key:     cfg.key,
+		log:     l,
+	})}
 
 	shutdownDone := make(chan struct{})
 	go func() {
@@ -122,20 +127,27 @@ func storageKind(cfg config) string {
 	}
 }
 
-func newRouter(repo metricsStorage, pinger ping.Pinger, key string, l *slog.Logger) http.Handler {
+type routerDeps struct {
+	storage metricsStorage
+	pinger  ping.Pinger
+	key     string
+	log     *slog.Logger
+}
+
+func newRouter(deps routerDeps) http.Handler {
 	r := chi.NewRouter()
 
-	r.Use(middleware.WithLogging(l))
+	r.Use(middleware.WithLogging(deps.log))
 	r.Use(middleware.WithGzip)
-	r.Use(middleware.WithHash(key))
+	r.Use(middleware.WithHash(deps.key))
 
-	updateJSON := updatejson.New(repo, l)
-	updatesJSON := updatesjson.New(repo, l)
-	valueJSON := valuejson.New(repo, l)
+	updateJSON := updatejson.New(deps.storage, deps.log)
+	updatesJSON := updatesjson.New(deps.storage, deps.log)
+	valueJSON := valuejson.New(deps.storage, deps.log)
 
-	r.Get("/", index.New(repo, l))
-	r.Get("/ping", ping.New(pinger, l))
-	r.Get("/value/{type}/{name}", value.New(repo, l))
+	r.Get("/", index.New(deps.storage, deps.log))
+	r.Get("/ping", ping.New(deps.pinger, deps.log))
+	r.Get("/value/{type}/{name}", value.New(deps.storage, deps.log))
 
 	r.Post("/update", updateJSON)
 	r.Post("/update/", updateJSON)
@@ -144,8 +156,8 @@ func newRouter(repo metricsStorage, pinger ping.Pinger, key string, l *slog.Logg
 	r.Post("/value", valueJSON)
 	r.Post("/value/", valueJSON)
 
-	r.Post("/update/gauge/{name}/{value}", gauge.New(repo, l))
-	r.Post("/update/counter/{name}/{value}", counter.New(repo, l))
+	r.Post("/update/gauge/{name}/{value}", gauge.New(deps.storage, deps.log))
+	r.Post("/update/counter/{name}/{value}", counter.New(deps.storage, deps.log))
 	r.Post("/update/{type}/{name}/{value}", unknowntype.New())
 
 	return r
