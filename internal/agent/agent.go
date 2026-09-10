@@ -30,10 +30,6 @@ type Agent struct {
 }
 
 func New(sender MetricsSender, pollInterval, reportInterval time.Duration, rateLimit int, l *slog.Logger) *Agent {
-	if rateLimit < 1 {
-		rateLimit = 1
-	}
-
 	return &Agent{
 		collector:      NewCollector(),
 		sender:         sender,
@@ -47,38 +43,29 @@ func New(sender MetricsSender, pollInterval, reportInterval time.Duration, rateL
 func (a *Agent) Run(ctx context.Context) {
 	batches := make(chan batch)
 
-	var sources sync.WaitGroup
-	sources.Add(3)
+	sources := []func(context.Context){
+		a.pollRuntime,
+		a.pollSystem,
+		func(ctx context.Context) { a.report(ctx, batches) },
+	}
 
-	go func() {
-		defer sources.Done()
-		a.pollRuntime(ctx)
-	}()
+	var running sync.WaitGroup
 
-	go func() {
-		defer sources.Done()
-		a.pollSystem(ctx)
-	}()
-
-	go func() {
-		defer sources.Done()
-		a.report(ctx, batches)
-	}()
+	for _, source := range sources {
+		running.Go(func() { source(ctx) })
+	}
 
 	var workers sync.WaitGroup
-	workers.Add(a.rateLimit)
 
 	for range a.rateLimit {
-		go func() {
-			defer workers.Done()
-
+		workers.Go(func() {
 			for b := range batches {
 				a.send(ctx, b)
 			}
-		}()
+		})
 	}
 
-	sources.Wait()
+	running.Wait()
 	close(batches)
 	workers.Wait()
 }
