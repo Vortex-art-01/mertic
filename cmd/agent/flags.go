@@ -15,12 +15,12 @@ var (
 	flagRateLimit      int
 )
 
-func parseFlags() {
+func parseFlags() error {
 	flag.StringVar(&flagRunAddr, "a", "localhost:8080", "адрес эндпоинта HTTP-сервера")
-	flag.Int64Var(&flagReportInterval, "r", 10, "частота отправки метрик на сервер, сек")
-	flag.Int64Var(&flagPollInterval, "p", 2, "частота опроса метрик из пакета runtime, сек")
+	flag.Int64Var(&flagReportInterval, "r", 10, "частота отправки метрик на сервер, сек (минимум 1)")
+	flag.Int64Var(&flagPollInterval, "p", 2, "частота опроса метрик из пакета runtime, сек (минимум 1)")
 	flag.StringVar(&flagKey, "k", "", "ключ подписи передаваемых данных (пустой — не подписывать)")
-	flag.IntVar(&flagRateLimit, "l", 1, "количество одновременно исходящих запросов на сервер")
+	flag.IntVar(&flagRateLimit, "l", 1, "количество одновременно исходящих запросов на сервер (минимум 1)")
 
 	flag.Parse()
 
@@ -32,7 +32,7 @@ func parseFlags() {
 		v, err := strconv.ParseInt(env, 10, 64)
 
 		if err != nil {
-			panic(fmt.Sprintf("Parse error REPORT_INTERVAL: %s", err))
+			return fmt.Errorf("некорректное значение REPORT_INTERVAL: %w", err)
 		}
 
 		flagReportInterval = v
@@ -42,7 +42,7 @@ func parseFlags() {
 		v, err := strconv.ParseInt(env, 10, 64)
 
 		if err != nil {
-			panic(fmt.Sprintf("Parse error POLL_INTERVAL: %s", err))
+			return fmt.Errorf("некорректное значение POLL_INTERVAL: %w", err)
 		}
 
 		flagPollInterval = v
@@ -56,9 +56,33 @@ func parseFlags() {
 		v, err := strconv.Atoi(env)
 
 		if err != nil {
-			panic(fmt.Sprintf("Parse error RATE_LIMIT: %s", err))
+			return fmt.Errorf("некорректное значение RATE_LIMIT: %w", err)
 		}
 
 		flagRateLimit = v
 	}
+
+	return validateFlags()
+}
+
+func validateFlags() error {
+	if flagReportInterval < 1 {
+		return fmt.Errorf(
+			"частота отправки метрик (-r / REPORT_INTERVAL) должна быть не меньше 1 секунды, получено %d",
+			flagReportInterval)
+	}
+
+	if flagPollInterval < 1 {
+		return fmt.Errorf(
+			"частота опроса метрик (-p / POLL_INTERVAL) должна быть не меньше 1 секунды, получено %d",
+			flagPollInterval)
+	}
+
+	if flagRateLimit < 1 {
+		return fmt.Errorf(
+			"количество одновременных запросов (-l / RATE_LIMIT) должно быть не меньше 1, получено %d",
+			flagRateLimit)
+	}
+
+	return nil
 }

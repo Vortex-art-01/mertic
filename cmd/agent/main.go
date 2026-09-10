@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -13,10 +14,12 @@ import (
 )
 
 func main() {
+	if err := parseFlags(); err != nil {
+		log.Fatal(err)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	parseFlags()
 
 	pollInterval := time.Duration(flagPollInterval) * time.Second
 	reportInterval := time.Duration(flagReportInterval) * time.Second
