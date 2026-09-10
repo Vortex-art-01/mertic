@@ -8,8 +8,6 @@ import (
 	"github.com/Vortex-art-01/mertic/internal/hash"
 )
 
-const noHash = "none"
-
 func WithHash(key string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if key == "" {
@@ -25,7 +23,7 @@ func WithHash(key string) func(http.Handler) http.Handler {
 
 			r.Body = io.NopCloser(bytes.NewReader(body))
 
-			if got := r.Header.Get(hash.Header); got != "" && got != noHash {
+			if got := r.Header.Get(hash.Header); got != "" && got != hash.None {
 				if !hash.Valid(body, key, got) {
 					http.Error(w, "invalid hash", http.StatusBadRequest)
 					return

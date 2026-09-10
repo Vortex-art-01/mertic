@@ -6,7 +6,10 @@ import (
 	"encoding/hex"
 )
 
-const Header = "HashSHA256"
+const (
+	Header = "HashSHA256"
+	None   = "none"
+)
 
 func Sign(data []byte, key string) string {
 	return hex.EncodeToString(sum(data, key))

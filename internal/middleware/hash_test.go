@@ -88,7 +88,7 @@ func TestWithHashRejectsInvalidSignature(t *testing.T) {
 
 // Клиент без ключа подписи не присылает — такие запросы сервер принимает.
 func TestWithHashAcceptsUnsignedRequests(t *testing.T) {
-	for _, sign := range []string{"", noHash} {
+	for _, sign := range []string{"", hash.None} {
 		called := false
 		handler := WithHash(testKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			called = true
