@@ -30,6 +30,10 @@ type Agent struct {
 }
 
 func New(sender MetricsSender, pollInterval, reportInterval time.Duration, rateLimit int, l *slog.Logger) *Agent {
+	if rateLimit < 1 {
+		rateLimit = 1
+	}
+
 	return &Agent{
 		collector:      NewCollector(),
 		sender:         sender,
