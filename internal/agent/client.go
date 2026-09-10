@@ -10,19 +10,22 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Vortex-art-01/mertic/internal/hash"
 	"github.com/Vortex-art-01/mertic/internal/model"
 	"github.com/Vortex-art-01/mertic/internal/retry"
 )
 
 type Client struct {
 	baseURL    string
+	key        string
 	httpClient *http.Client
 	delays     []time.Duration
 }
 
-func NewClient(baseURL string) *Client {
+func NewClient(baseURL, key string) *Client {
 	return &Client{
 		baseURL:    baseURL,
+		key:        key,
 		httpClient: &http.Client{},
 		delays:     retry.DefaultDelays(),
 	}
@@ -61,23 +64,24 @@ func gzipped(data []byte) ([]byte, error) {
 }
 
 func (c *Client) post(ctx context.Context, path string, body []byte) error {
+	var sign string
+	if c.key != "" {
+		sign = hash.Sign(body, c.key)
+	}
+
 	compressed, err := gzipped(body)
 	if err != nil {
 		return fmt.Errorf("compress: %w", err)
 	}
 
 	return retry.DoWith(ctx, c.delays, retriable, func() error {
-		return c.do(ctx, path, compressed)
+		return c.do(ctx, path, compressed, sign)
 	})
 }
 
-// do выполняет один запрос. Сервер понимает gzip, а метрики жмутся хорошо —
-// пакетом тем более, поэтому тело уходит сжатым.
-func (c *Client) do(ctx context.Context, path string, body []byte) error {
+func (c *Client) do(ctx context.Context, path string, body []byte, sign string) error {
 	url := c.baseURL + path
 
-	// Читатель тела создаётся заново на каждой попытке: прошлая дочитала
-	// его до конца, и повтор ушёл бы с пустым телом.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("build request to %s: %w", url, err)
@@ -85,14 +89,16 @@ func (c *Client) do(ctx context.Context, path string, body []byte) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
 
+	if sign != "" {
+		req.Header.Set(hash.Header, sign)
+	}
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return &TransportError{URL: url, Err: err}
 	}
 	defer resp.Body.Close()
 
-	// Тело дочитывается даже при ошибке: иначе соединение не вернётся
-	// в пул и следующая попытка пойдёт по новому.
 	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
