@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/Vortex-art-01/mertic/internal/audit"
 	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
@@ -18,6 +19,11 @@ type MetricsStorage interface {
 	AddCounter(ctx context.Context, name string, value int64) error
 	GetGauge(ctx context.Context, name string) (float64, bool, error)
 	GetCounter(ctx context.Context, name string) (int64, bool, error)
+}
+
+// Auditor узнаёт о принятых метриках; кому он передаст событие, хендлеру неважно.
+type Auditor interface {
+	Notify(event audit.Event)
 }
 
 // reject отвечает клиенту и пишет причину отказа в лог: middleware логирует
@@ -36,7 +42,7 @@ func fail(l *slog.Logger, w http.ResponseWriter, m model.Metrics, err error) {
 	http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 }
 
-func New(storage MetricsStorage, l *slog.Logger) http.HandlerFunc {
+func New(storage MetricsStorage, auditor Auditor, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var m model.Metrics
 		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
@@ -101,5 +107,7 @@ func New(storage MetricsStorage, l *slog.Logger) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = buf.WriteTo(w)
+
+		auditor.Notify(audit.NewEvent(r, m.ID))
 	}
 }
