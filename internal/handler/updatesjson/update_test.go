@@ -7,11 +7,21 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/Vortex-art-01/mertic/internal/audit"
 	"github.com/Vortex-art-01/mertic/internal/model"
 )
+
+type mockAuditor struct {
+	events []audit.Event
+}
+
+func (m *mockAuditor) Notify(event audit.Event) {
+	m.events = append(m.events, event)
+}
 
 // mockStorage повторяет поведение настоящих хранилищ: у gauge остаётся
 // последнее значение, приращения counter складываются.
@@ -59,7 +69,7 @@ func do(t *testing.T, storage MetricsStorage, body string) (*http.Response, stri
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	New(storage, l)(w, req)
+	New(storage, &mockAuditor{}, l)(w, req)
 
 	return w.Result(), logs.String()
 }
@@ -196,5 +206,72 @@ func TestNewReportsStorageFailure(t *testing.T) {
 		if !strings.Contains(logs, want) {
 			t.Errorf("log must contain %q, got:\n%s", want, logs)
 		}
+	}
+}
+
+// На весь пакет — одно событие со всеми именами. Отклонённый пакет и пустой
+// в аудит не попадают: в первом ничего не принято, во втором нечего принимать.
+func TestNewNotifiesAuditor(t *testing.T) {
+	tests := []struct {
+		name        string
+		body        string
+		storageErr  error
+		wantMetrics []string
+	}{
+		{
+			name: "whole batch",
+			body: `[
+				{"id":"Alloc","type":"gauge","value":42.5},
+				{"id":"PollCount","type":"counter","delta":3}
+			]`,
+			wantMetrics: []string{"Alloc", "PollCount"},
+		},
+		{name: "empty batch", body: `[]`},
+		{name: "invalid json", body: `{`},
+		{
+			name: "batch with invalid metric",
+			body: `[
+				{"id":"Alloc","type":"gauge","value":42.5},
+				{"id":"Broken","type":"histogram","value":1}
+			]`,
+		},
+		{
+			name:       "storage failure",
+			body:       `[{"id":"Alloc","type":"gauge","value":1}]`,
+			storageErr: errors.New("database is down"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			storage := newMockStorage()
+			storage.err = tt.storageErr
+
+			auditor := &mockAuditor{}
+
+			req := httptest.NewRequest(http.MethodPost, "/updates/", strings.NewReader(tt.body))
+			req.RemoteAddr = "192.168.0.42:5555"
+
+			New(storage, auditor, slog.New(slog.DiscardHandler))(httptest.NewRecorder(), req)
+
+			if tt.wantMetrics == nil {
+				if len(auditor.events) != 0 {
+					t.Errorf("events = %+v, want none", auditor.events)
+				}
+				return
+			}
+
+			if len(auditor.events) != 1 {
+				t.Fatalf("got %d events, want 1", len(auditor.events))
+			}
+
+			event := auditor.events[0]
+			if !slices.Equal(event.Metrics, tt.wantMetrics) {
+				t.Errorf("metrics = %v, want %v", event.Metrics, tt.wantMetrics)
+			}
+			if event.IPAddress != "192.168.0.42" {
+				t.Errorf("ip_address = %q, want %q", event.IPAddress, "192.168.0.42")
+			}
+		})
 	}
 }

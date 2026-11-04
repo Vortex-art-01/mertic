@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/Vortex-art-01/mertic/internal/audit"
 	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
@@ -16,6 +17,11 @@ import (
 // применяют его целиком, поэтому частично принятых пакетов не бывает.
 type MetricsStorage interface {
 	SaveBatch(ctx context.Context, metrics []model.Metrics) error
+}
+
+// Auditor узнаёт о принятых метриках; кому он передаст событие, хендлеру неважно.
+type Auditor interface {
+	Notify(event audit.Event)
 }
 
 // reject отвечает клиенту и пишет причину отказа в лог: middleware логирует
@@ -49,7 +55,7 @@ func validate(m model.Metrics) (int, string) {
 	return 0, ""
 }
 
-func New(storage MetricsStorage, l *slog.Logger) http.HandlerFunc {
+func New(storage MetricsStorage, auditor Auditor, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var metrics []model.Metrics
 		if err := json.NewDecoder(r.Body).Decode(&metrics); err != nil {
@@ -82,5 +88,19 @@ func New(storage MetricsStorage, l *slog.Logger) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
+
+		// В пустом пакете не было метрик — значит, и сообщать аудиту не о чем.
+		if len(metrics) > 0 {
+			auditor.Notify(audit.NewEvent(r, metricNames(metrics)...))
+		}
 	}
+}
+
+func metricNames(metrics []model.Metrics) []string {
+	names := make([]string, len(metrics))
+	for i, m := range metrics {
+		names[i] = m.ID
+	}
+
+	return names
 }
