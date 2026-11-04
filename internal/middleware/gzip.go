@@ -51,6 +51,10 @@ func (w *compressWriter) decide() {
 	w.zw = gzip.NewWriter(w.ResponseWriter)
 }
 
+func (w *compressWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 func (w *compressWriter) WriteHeader(status int) {
 	w.decide()
 	w.ResponseWriter.WriteHeader(status)

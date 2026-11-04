@@ -1,13 +1,22 @@
 package agent
 
 import (
+	"context"
+	"fmt"
+	"maps"
 	"math/rand/v2"
 	"runtime"
+	"strconv"
+	"sync"
+
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/mem"
 )
 
-// Collector собирает рантайм-метрики из пакета runtime.
-// Не потокобезопасен: предполагается использование из одной горутины.
+const pollCountMetric = "PollCount"
+
 type Collector struct {
+	mu        sync.Mutex
 	gauges    map[string]float64
 	pollCount int64
 }
@@ -18,11 +27,12 @@ func NewCollector() *Collector {
 	}
 }
 
-// Poll обновляет метрики из runtime.MemStats,
-// генерирует RandomValue и увеличивает PollCount на 1.
-func (c *Collector) Poll() {
+func (c *Collector) PollRuntime() {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	c.gauges["Alloc"] = float64(ms.Alloc)
 	c.gauges["BuckHashSys"] = float64(ms.BuckHashSys)
@@ -56,18 +66,50 @@ func (c *Collector) Poll() {
 	c.pollCount++
 }
 
-func (c *Collector) Gauges() map[string]float64 {
-	out := make(map[string]float64, len(c.gauges))
-	for name, value := range c.gauges {
-		out[name] = value
+func (c *Collector) PollSystem(ctx context.Context) error {
+	memory, err := mem.VirtualMemoryWithContext(ctx)
+	if err != nil {
+		return fmt.Errorf("read virtual memory: %w", err)
 	}
-	return out
+
+	utilization, err := cpu.PercentWithContext(ctx, 0, true)
+	if err != nil {
+		return fmt.Errorf("read cpu utilization: %w", err)
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.gauges["TotalMemory"] = float64(memory.Total)
+	c.gauges["FreeMemory"] = float64(memory.Free)
+
+	for i, percent := range utilization {
+		c.gauges[cpuUtilizationMetric(i+1)] = percent
+	}
+
+	return nil
 }
 
-func (c *Collector) PollCount() int64 {
-	return c.pollCount
+func cpuUtilizationMetric(core int) string {
+	return "CPUutilization" + strconv.Itoa(core)
 }
 
-func (c *Collector) ResetPollCount() {
+func (c *Collector) Take() (map[string]float64, int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	gauges := make(map[string]float64, len(c.gauges))
+	maps.Copy(gauges, c.gauges)
+
+	delta := c.pollCount
 	c.pollCount = 0
+
+	return gauges, delta
+}
+
+func (c *Collector) AddPollCount(delta int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.pollCount += delta
 }

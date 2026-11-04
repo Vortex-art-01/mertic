@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Vortex-art-01/mertic/internal/hash"
 	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
@@ -19,6 +20,7 @@ type recordedRequest struct {
 	path            string
 	contentType     string
 	contentEncoding string
+	sign            string
 	body            []byte
 }
 
@@ -31,6 +33,10 @@ func (r recordedRequest) decode(t *testing.T, v any) {
 }
 
 func newTestServer(t *testing.T, status int) (*Client, *[]recordedRequest) {
+	return newTestServerWithKey(t, status, "")
+}
+
+func newTestServerWithKey(t *testing.T, status int, key string) (*Client, *[]recordedRequest) {
 	t.Helper()
 
 	var requests []recordedRequest
@@ -40,6 +46,7 @@ func newTestServer(t *testing.T, status int) (*Client, *[]recordedRequest) {
 			path:            r.URL.Path,
 			contentType:     r.Header.Get("Content-Type"),
 			contentEncoding: r.Header.Get("Content-Encoding"),
+			sign:            r.Header.Get(hash.Header),
 		}
 
 		// Агент всегда сжимает тело, поэтому читаем через gzip.
@@ -60,7 +67,7 @@ func newTestServer(t *testing.T, status int) (*Client, *[]recordedRequest) {
 	}))
 	t.Cleanup(srv.Close)
 
-	return newTestClient(srv.URL), &requests
+	return newTestClient(srv.URL, key), &requests
 }
 
 func TestClientSendBatch(t *testing.T) {
@@ -134,8 +141,8 @@ func TestClientSendBatchErrorStatus(t *testing.T) {
 
 // newTestClient — клиент с теми же повторами, но без настоящих пауз между
 // ними: проверять расписание задержек — дело тестов пакета retry.
-func newTestClient(baseURL string) *Client {
-	c := NewClient(baseURL)
+func newTestClient(baseURL, key string) *Client {
+	c := NewClient(baseURL, key)
 	c.delays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
 
 	return c
@@ -159,7 +166,7 @@ func flakyServer(t *testing.T, failures int, status int) (*Client, *int) {
 	}))
 	t.Cleanup(srv.Close)
 
-	return newTestClient(srv.URL), &requests
+	return newTestClient(srv.URL, ""), &requests
 }
 
 // Временная ошибка сервера — повод повторить, а не потерять метрики.
@@ -220,7 +227,7 @@ func TestClientDoesNotRetryBadRequest(t *testing.T) {
 // Недоступный сервер — тот самый случай, ради которого повторы и заведены:
 // агент обязан пережить его, вернув ошибку, а не завершившись.
 func TestClientRetriesUnreachableServer(t *testing.T) {
-	client := newTestClient("http://127.0.0.1:1") // заведомо недоступный адрес
+	client := newTestClient("http://127.0.0.1:1", "") // заведомо недоступный адрес
 
 	value := 1.0
 	batch := []model.Metrics{{ID: "Alloc", MType: model.Gauge, Value: &value}}
@@ -253,5 +260,51 @@ func TestClientStopsRetryingOnCanceledContext(t *testing.T) {
 
 	if *requests != 0 {
 		t.Errorf("server got %d requests, want none", *requests)
+	}
+}
+
+// С ключом агент подписывает то самое тело, которое потом сжимает: сервер
+// проверяет подпись уже после распаковки.
+func TestClientSignsBatch(t *testing.T) {
+	const key = "secret"
+
+	client, requests := newTestServerWithKey(t, http.StatusOK, key)
+
+	value := 123.45
+	batch := []model.Metrics{{ID: "Alloc", MType: model.Gauge, Value: &value}}
+
+	if err := client.SendBatch(t.Context(), batch); err != nil {
+		t.Fatalf("SendBatch: %v", err)
+	}
+
+	if len(*requests) != 1 {
+		t.Fatalf("got %d requests, want 1", len(*requests))
+	}
+
+	req := (*requests)[0]
+	if req.sign == "" {
+		t.Fatalf("request has no %s header", hash.Header)
+	}
+	if !hash.Valid(req.body, key, req.sign) {
+		t.Errorf("signature %q does not match body %q", req.sign, req.body)
+	}
+}
+
+// Без ключа заголовку подписи взяться неоткуда.
+func TestClientDoesNotSignWithoutKey(t *testing.T) {
+	client, requests := newTestServer(t, http.StatusOK)
+
+	value := 123.45
+	batch := []model.Metrics{{ID: "Alloc", MType: model.Gauge, Value: &value}}
+
+	if err := client.SendBatch(t.Context(), batch); err != nil {
+		t.Fatalf("SendBatch: %v", err)
+	}
+
+	if len(*requests) != 1 {
+		t.Fatalf("got %d requests, want 1", len(*requests))
+	}
+	if sign := (*requests)[0].sign; sign != "" {
+		t.Errorf("%s = %q, want no signature without a key", hash.Header, sign)
 	}
 }
