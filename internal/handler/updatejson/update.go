@@ -1,13 +1,13 @@
 package updatejson
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 
 	"github.com/Vortex-art-01/mertic/internal/audit"
+	"github.com/Vortex-art-01/mertic/internal/httpbody"
 	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
@@ -45,7 +45,7 @@ func fail(l *slog.Logger, w http.ResponseWriter, m model.Metrics, err error) {
 func New(storage MetricsStorage, auditor Auditor, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var m model.Metrics
-		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+		if err := httpbody.DecodeJSON(r.Body, &m); err != nil {
 			reject(l, w, http.StatusBadRequest, "invalid json body", slog.Any("error", err))
 			return
 		}
@@ -96,8 +96,10 @@ func New(storage MetricsStorage, auditor Auditor, l *slog.Logger) http.HandlerFu
 			return
 		}
 
-		var buf bytes.Buffer
-		if err := json.NewEncoder(&buf).Encode(m); err != nil {
+		buf := httpbody.GetBuffer()
+		defer httpbody.PutBuffer(buf)
+
+		if err := json.NewEncoder(buf).Encode(m); err != nil {
 			l.Error("update: failed to encode response",
 				slog.String("metric", m.ID), slog.Any("error", err))
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)

@@ -57,6 +57,40 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 }
 
+// Значения дампа лежат в общих массивах, поэтому у каждой метрики должно остаться своё.
+func TestSaveKeepsEachValue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "metrics-db.json")
+
+	saver, source := newTestFile(t, path, false)
+
+	gauges := map[string]float64{"Alloc": 1.5, "Frees": 2.5, "Sys": 3.5}
+	for name, value := range gauges {
+		_ = source.SaveGauge(t.Context(), name, value)
+	}
+
+	counters := map[string]int64{"PollCount": 10, "Requests": 20}
+	for name, delta := range counters {
+		_ = source.AddCounter(t.Context(), name, delta)
+	}
+
+	if err := saver.save(t.Context()); err != nil {
+		t.Fatalf("save() error = %v", err)
+	}
+
+	_, restored := newTestFile(t, path, true)
+
+	for name, want := range gauges {
+		if got, ok, _ := restored.GetGauge(t.Context(), name); !ok || got != want {
+			t.Errorf("gauge %s = %v, %v; want %v, true", name, got, ok, want)
+		}
+	}
+	for name, want := range counters {
+		if got, ok, _ := restored.GetCounter(t.Context(), name); !ok || got != want {
+			t.Errorf("counter %s = %v, %v; want %v, true", name, got, ok, want)
+		}
+	}
+}
+
 // Счётчик хранится в дампе накопленной суммой: восстановление не должно
 // прибавлять её к тому, что уже есть в хранилище.
 func TestLoadReplacesCounter(t *testing.T) {

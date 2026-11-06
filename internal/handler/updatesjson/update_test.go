@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,8 +17,11 @@ import (
 )
 
 type mockAuditor struct {
-	events []audit.Event
+	events   []audit.Event
+	disabled bool
 }
+
+func (m *mockAuditor) Enabled() bool { return !m.disabled }
 
 func (m *mockAuditor) Notify(event audit.Event) {
 	m.events = append(m.events, event)
@@ -146,6 +150,7 @@ func TestNewRejectsBadRequests(t *testing.T) {
 		wantStatus int
 	}{
 		{"invalid json", `{`, http.StatusBadRequest},
+		{"garbage after the batch", `[{"id":"Alloc","type":"gauge","value":1}] oops`, http.StatusBadRequest},
 		{"single metric instead of a list", `{"id":"Alloc","type":"gauge","value":1}`, http.StatusBadRequest},
 		{"missing name", `[{"id":"","type":"gauge","value":1}]`, http.StatusNotFound},
 		{"unknown type", `[{"id":"Alloc","type":"histogram","value":1}]`, http.StatusBadRequest},
@@ -191,6 +196,81 @@ func TestNewRejectsWholeBatchOnSingleInvalidMetric(t *testing.T) {
 	}
 }
 
+// Слайсы под пакеты переиспользуются, а JSON заполняет существующие элементы на месте.
+// Если не обнулять их, gauge без значения прошёл бы проверку со значением из прошлого
+// запроса, а новое число записалось бы по указателю, который хранит чужой пакет.
+func TestNewDoesNotLeakFieldsBetweenRequests(t *testing.T) {
+	storage := newMockStorage()
+
+	for range 20 {
+		res, _ := do(t, storage, `[
+			{"id":"Alloc","type":"gauge","value":42.5},
+			{"id":"PollCount","type":"counter","delta":3}
+		]`)
+		res.Body.Close()
+
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("valid batch: status = %d, want %d", res.StatusCode, http.StatusOK)
+		}
+
+		res, _ = do(t, storage, `[{"id":"NoValue","type":"gauge"}]`)
+		res.Body.Close()
+
+		if res.StatusCode != http.StatusBadRequest {
+			t.Errorf("gauge without value: status = %d, want %d", res.StatusCode, http.StatusBadRequest)
+		}
+
+		res, _ = do(t, storage, `[{"id":"NoDelta","type":"counter"}]`)
+		res.Body.Close()
+
+		if res.StatusCode != http.StatusBadRequest {
+			t.Errorf("counter without delta: status = %d, want %d", res.StatusCode, http.StatusBadRequest)
+		}
+	}
+
+	if _, ok := storage.gauges["NoValue"]; ok {
+		t.Error("gauge without value reached the storage")
+	}
+	if got := storage.counters["PollCount"]; got != 60 {
+		t.Errorf("PollCount = %d, want 60", got)
+	}
+}
+
+// Пакет больше типичного разбирается как обычно, но его слайс в пул не возвращается:
+// из-за одного огромного пакета память не должна оставаться занятой.
+func TestNewHandlesBatchLargerThanPooled(t *testing.T) {
+	var body strings.Builder
+
+	body.WriteByte('[')
+	for i := range maxPooledBatch + 1 {
+		if i > 0 {
+			body.WriteByte(',')
+		}
+		fmt.Fprintf(&body, `{"id":"Metric%d","type":"gauge","value":%d}`, i, i)
+	}
+	body.WriteByte(']')
+
+	storage := newMockStorage()
+
+	res, _ := do(t, storage, body.String())
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusOK)
+	}
+	if len(storage.gauges) != maxPooledBatch+1 {
+		t.Errorf("saved %d gauges, want %d", len(storage.gauges), maxPooledBatch+1)
+	}
+
+	for range 100 {
+		batch := batches.Get().(*[]model.Metrics)
+		if cap(*batch) > maxPooledBatch {
+			t.Fatalf("slice with capacity %d came back from the pool", cap(*batch))
+		}
+		defer batches.Put(batch)
+	}
+}
+
 func TestNewReportsStorageFailure(t *testing.T) {
 	storage := newMockStorage()
 	storage.err = errors.New("database is down")
@@ -206,6 +286,24 @@ func TestNewReportsStorageFailure(t *testing.T) {
 		if !strings.Contains(logs, want) {
 			t.Errorf("log must contain %q, got:\n%s", want, logs)
 		}
+	}
+}
+
+// С выключенным аудитом событие не собирается и никому не отправляется.
+func TestNewSkipsEventWhenAuditIsDisabled(t *testing.T) {
+	auditor := &mockAuditor{disabled: true}
+
+	req := httptest.NewRequest(http.MethodPost, "/updates/",
+		strings.NewReader(`[{"id":"Alloc","type":"gauge","value":1}]`))
+	w := httptest.NewRecorder()
+
+	New(newMockStorage(), auditor, slog.New(slog.DiscardHandler))(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if len(auditor.events) != 0 {
+		t.Errorf("events = %+v, want none", auditor.events)
 	}
 }
 

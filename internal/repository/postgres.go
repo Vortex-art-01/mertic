@@ -135,7 +135,8 @@ func addCounters(ctx context.Context, tx pgx.Tx, counters map[string]int64) erro
 }
 
 func splitBatch(metrics []model.Metrics) (map[string]float64, map[string]int64) {
-	gauges := make(map[string]float64)
+	// Почти весь пакет — gauge, поэтому их карта сразу рассчитана на весь пакет.
+	gauges := make(map[string]float64, len(metrics))
 	counters := make(map[string]int64)
 
 	for _, m := range metrics {

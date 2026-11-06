@@ -57,6 +57,27 @@ func (b *blocked) Update(ctx context.Context, event Event) error {
 	}
 }
 
+// Хендлер не собирает событие, пока его некому отправить.
+func TestSubjectEnabledOnlyWithObservers(t *testing.T) {
+	subject := NewSubject(slog.New(slog.DiscardHandler))
+
+	if subject.Enabled() {
+		t.Error("Enabled() = true without observers")
+	}
+
+	subject.Register(&recorder{})
+
+	if !subject.Enabled() {
+		t.Error("Enabled() = false with an observer")
+	}
+
+	subject.Close()
+
+	if subject.Enabled() {
+		t.Error("Enabled() = true after Close")
+	}
+}
+
 func TestSubjectNotifiesEveryObserverInOrder(t *testing.T) {
 	first, second := &recorder{}, &recorder{}
 

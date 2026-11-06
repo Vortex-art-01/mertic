@@ -6,6 +6,48 @@ import (
 	"testing"
 )
 
+// Без параметров профилировщик выключен: профили раскрывают внутренности процесса,
+// поэтому он включается только явно. Переменная окружения перекрывает флаг.
+func TestParseFlagsPprof(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		env  string
+		want string
+	}{
+		{name: "по умолчанию выключен"},
+		{name: "флаг", args: []string{"--pprof-addr", "localhost:6060"}, want: "localhost:6060"},
+		{name: "переменная окружения", env: "localhost:7070", want: "localhost:7070"},
+		{
+			name: "переменная окружения важнее флага",
+			args: []string{"--pprof-addr", "localhost:6060"},
+			env:  "localhost:7070",
+			want: "localhost:7070",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args, flags := os.Args, flag.CommandLine
+			t.Cleanup(func() { os.Args, flag.CommandLine = args, flags })
+
+			os.Args = append([]string{"server"}, tt.args...)
+			flag.CommandLine = flag.NewFlagSet("server", flag.ContinueOnError)
+
+			t.Setenv("PPROF_ADDRESS", tt.env)
+			if tt.env == "" {
+				if err := os.Unsetenv("PPROF_ADDRESS"); err != nil {
+					t.Fatalf("failed to unset PPROF_ADDRESS: %v", err)
+				}
+			}
+
+			if got := parseFlags().pprofAddr; got != tt.want {
+				t.Errorf("pprofAddr = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // Без параметров аудит выключен, а переменная окружения, как и везде,
 // перекрывает значение флага.
 func TestParseFlagsAudit(t *testing.T) {

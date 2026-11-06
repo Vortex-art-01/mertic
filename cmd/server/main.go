@@ -53,6 +53,14 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 		return err
 	}
 
+	if cfg.pprofAddr != "" {
+		profiler, err := startPprof(cfg.pprofAddr, l)
+		if err != nil {
+			return err
+		}
+		defer profiler.Close()
+	}
+
 	var (
 		storage metricsStorage
 		pinger  ping.Pinger
@@ -108,7 +116,8 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 		slog.Bool("restore", cfg.restore),
 		slog.Bool("signed", cfg.key != ""),
 		slog.String("audit file", cfg.auditFile),
-		slog.Bool("audit url", cfg.auditURL != ""))
+		slog.Bool("audit url", cfg.auditURL != ""),
+		slog.String("pprof", cfg.pprofAddr))
 
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
