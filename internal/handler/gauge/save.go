@@ -5,13 +5,20 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+
+	"github.com/Vortex-art-01/mertic/internal/audit"
 )
 
 type GaugeSaver interface {
 	SaveGauge(ctx context.Context, name string, value float64) error
 }
 
-func New(saver GaugeSaver, l *slog.Logger) http.HandlerFunc {
+// Auditor узнаёт о принятых метриках; кому он передаст событие, хендлеру неважно.
+type Auditor interface {
+	Notify(event audit.Event)
+}
+
+func New(saver GaugeSaver, auditor Auditor, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		if name == "" {
@@ -34,5 +41,7 @@ func New(saver GaugeSaver, l *slog.Logger) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
+
+		auditor.Notify(audit.NewEvent(r, name))
 	}
 }

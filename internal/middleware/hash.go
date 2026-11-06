@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/Vortex-art-01/mertic/internal/hash"
+	"github.com/Vortex-art-01/mertic/internal/httpbody"
 )
 
 func WithHash(key string) func(http.Handler) http.Handler {
@@ -14,25 +15,31 @@ func WithHash(key string) func(http.Handler) http.Handler {
 			return next
 		}
 
+		signer := hash.NewSigner(key)
+
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Подпись проверяется, только если клиент её прислал: политика
 			// «кто подписал, того и проверяем» описана у hash.None
 			if got := r.Header.Get(hash.Header); got != "" && got != hash.None {
-				body, err := io.ReadAll(r.Body)
-				if err != nil {
+				body := httpbody.GetBuffer()
+				defer httpbody.PutBuffer(body)
+
+				if _, err := body.ReadFrom(r.Body); err != nil {
 					http.Error(w, "failed to read request body", http.StatusBadRequest)
 					return
 				}
 
-				r.Body = io.NopCloser(bytes.NewReader(body))
+				r.Body = io.NopCloser(bytes.NewReader(body.Bytes()))
 
-				if !hash.Valid(body, key, got) {
+				if !signer.Valid(body.Bytes(), got) {
 					http.Error(w, "invalid hash", http.StatusBadRequest)
 					return
 				}
 			}
 
-			hw := &hashWriter{ResponseWriter: w, key: key}
+			hw := &hashWriter{ResponseWriter: w, signer: signer, body: httpbody.GetBuffer()}
+			defer httpbody.PutBuffer(hw.body)
+
 			next.ServeHTTP(hw, r)
 			hw.flush()
 		})
@@ -47,9 +54,9 @@ func WithHash(key string) func(http.Handler) http.Handler {
 // для большого или потокового ответа такую подпись придётся пересматривать.
 type hashWriter struct {
 	http.ResponseWriter
-	key    string
+	signer *hash.Signer
 	status int
-	body   bytes.Buffer
+	body   *bytes.Buffer
 }
 
 func (w *hashWriter) Unwrap() http.ResponseWriter {
@@ -71,7 +78,7 @@ func (w *hashWriter) Write(b []byte) (int, error) {
 }
 
 func (w *hashWriter) flush() {
-	w.Header().Set(hash.Header, hash.Sign(w.body.Bytes(), w.key))
+	w.Header().Set(hash.Header, w.signer.Sign(w.body.Bytes()))
 
 	if w.status == 0 {
 		w.status = http.StatusOK

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -68,6 +69,43 @@ func newTestServerWithKey(t *testing.T, status int, key string) (*Client, *[]rec
 	t.Cleanup(srv.Close)
 
 	return newTestClient(srv.URL, key), &requests
+}
+
+// Компрессор переиспользуется, поэтому следующий пакет не должен содержать ничего от
+// предыдущего, а уже отданный результат — измениться.
+func TestGzippedStreamsAreIndependent(t *testing.T) {
+	first, err := gzipped([]byte(`[{"id":"первый пакет"}]`))
+	if err != nil {
+		t.Fatalf("gzipped() error = %v", err)
+	}
+
+	second, err := gzipped([]byte(`[{"id":"второй пакет, уже другой"}]`))
+	if err != nil {
+		t.Fatalf("gzipped() error = %v", err)
+	}
+
+	for _, tt := range []struct {
+		compressed []byte
+		want       string
+	}{
+		{first, `[{"id":"первый пакет"}]`},
+		{second, `[{"id":"второй пакет, уже другой"}]`},
+	} {
+		zr, err := gzip.NewReader(bytes.NewReader(tt.compressed))
+		if err != nil {
+			t.Fatalf("failed to open gzip stream: %v", err)
+		}
+
+		got, err := io.ReadAll(zr)
+		if err != nil {
+			t.Fatalf("failed to read gzip stream: %v", err)
+		}
+		zr.Close()
+
+		if string(got) != tt.want {
+			t.Errorf("decompressed %q, want %q", got, tt.want)
+		}
+	}
 }
 
 func TestClientSendBatch(t *testing.T) {

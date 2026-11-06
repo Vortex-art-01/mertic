@@ -179,13 +179,16 @@ func (f *File) snapshot(ctx context.Context) ([]model.Metrics, error) {
 
 	metrics := make([]model.Metrics, 0, len(gauges)+len(counters))
 
+	values := make([]float64, 0, len(gauges))
+	deltas := make([]int64, 0, len(counters))
+
 	for _, name := range slices.Sorted(maps.Keys(gauges)) {
-		value := gauges[name]
-		metrics = append(metrics, model.Metrics{ID: name, MType: model.Gauge, Value: &value})
+		values = append(values, gauges[name])
+		metrics = append(metrics, model.Metrics{ID: name, MType: model.Gauge, Value: &values[len(values)-1]})
 	}
 	for _, name := range slices.Sorted(maps.Keys(counters)) {
-		delta := counters[name]
-		metrics = append(metrics, model.Metrics{ID: name, MType: model.Counter, Delta: &delta})
+		deltas = append(deltas, counters[name])
+		metrics = append(metrics, model.Metrics{ID: name, MType: model.Counter, Delta: &deltas[len(deltas)-1]})
 	}
 
 	return metrics, nil

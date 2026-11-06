@@ -4,6 +4,8 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"hash"
+	"sync"
 )
 
 // Контракт протокола подписи.
@@ -26,22 +28,90 @@ const (
 	None = "none"
 )
 
-func Sign(data []byte, key string) string {
-	return hex.EncodeToString(sum(data, key))
+// Signer считает и проверяет подписи одним ключом. hmac.New выделяет память под два
+// состояния SHA-256 и блоки ключа, поэтому сервер, который проверяет каждый запрос и
+// подписывает каждый ответ, переиспользует их через пул. Signer можно использовать
+// из нескольких горутин.
+type Signer struct {
+	macs sync.Pool
 }
 
-func Valid(data []byte, key, want string) bool {
-	got, err := hex.DecodeString(want)
-	if err != nil {
+// mac — вычислитель HMAC вместе с буфером под результат: через интерфейс hash.Hash
+// буфер со стека всё равно ушёл бы в кучу.
+type mac struct {
+	hash hash.Hash
+	sum  [sha256.Size]byte
+}
+
+func newMAC(key string) *mac {
+	return &mac{hash: hmac.New(sha256.New, []byte(key))}
+}
+
+// compute возвращает срез буфера m. Вызывать его можно только на чистом вычислителе:
+// только что созданном или сброшенном при возврате в пул.
+func (m *mac) compute(data []byte) []byte {
+	m.hash.Write(data)
+
+	return m.hash.Sum(m.sum[:0])
+}
+
+func (m *mac) sign(data []byte) string {
+	var encoded [sha256.Size * 2]byte
+
+	hex.Encode(encoded[:], m.compute(data))
+
+	return string(encoded[:])
+}
+
+func (m *mac) valid(data []byte, want string) bool {
+	var decoded [sha256.Size]byte
+
+	if len(want) != len(decoded)*2 {
+		return false
+	}
+	if _, err := hex.Decode(decoded[:], []byte(want)); err != nil {
 		return false
 	}
 
-	return hmac.Equal(got, sum(data, key))
+	return hmac.Equal(decoded[:], m.compute(data))
 }
 
-func sum(data []byte, key string) []byte {
-	mac := hmac.New(sha256.New, []byte(key))
-	mac.Write(data)
+func NewSigner(key string) *Signer {
+	s := &Signer{}
+	s.macs.New = func() any { return newMAC(key) }
 
-	return mac.Sum(nil)
+	return s
+}
+
+// put сбрасывает вычислитель и возвращает его в пул. Сброс здесь, а не перед расчётом,
+// потому что первый Reset у hmac дорогой, а разовым подписям он вообще не нужен.
+func (s *Signer) put(m *mac) {
+	m.hash.Reset()
+	s.macs.Put(m)
+}
+
+// Sign возвращает подпись data в hex.
+func (s *Signer) Sign(data []byte) string {
+	m := s.macs.Get().(*mac)
+	defer s.put(m)
+
+	return m.sign(data)
+}
+
+// Valid сообщает, совпадает ли подпись want в hex с подписью data.
+func (s *Signer) Valid(data []byte, want string) bool {
+	m := s.macs.Get().(*mac)
+	defer s.put(m)
+
+	return m.valid(data, want)
+}
+
+// Sign подписывает data разово: для редких подписей, когда держать Signer незачем.
+func Sign(data []byte, key string) string {
+	return newMAC(key).sign(data)
+}
+
+// Valid проверяет подпись разово: для редких проверок, когда держать Signer незачем.
+func Valid(data []byte, key, want string) bool {
+	return newMAC(key).valid(data, want)
 }

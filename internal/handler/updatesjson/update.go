@@ -5,17 +5,60 @@ package updatesjson
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
+	"sync"
 
+	"github.com/Vortex-art-01/mertic/internal/audit"
+	"github.com/Vortex-art-01/mertic/internal/httpbody"
 	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
+const (
+	// batchCapacity — запас в слайсе под пакет: агент присылает несколько десятков
+	// метрик, и с таким запасом разбор JSON обходится без наращивания слайса.
+	batchCapacity = 64
+
+	// maxPooledBatch ограничивает слайсы, которые возвращаются в пул: из-за одного
+	// огромного пакета память не должна оставаться занятой.
+	maxPooledBatch = 1024
+)
+
+// okResponse — ответ на принятый пакет.
+var okResponse = []byte(`{"status":"ok"}`)
+
+// batches — пул слайсов под пакеты метрик: сервер разбирает их постоянно.
+var batches = sync.Pool{New: func() any {
+	batch := make([]model.Metrics, 0, batchCapacity)
+	return &batch
+}}
+
+// putBatch обнуляет элементы слайса: JSON заполняет существующие элементы на месте,
+// и поля прошлого запроса иначе достались бы следующему, а записанное число попало
+// бы по старому указателю.
+func putBatch(batch *[]model.Metrics) {
+	if cap(*batch) > maxPooledBatch {
+		return
+	}
+
+	clear((*batch)[:cap(*batch)])
+	*batch = (*batch)[:0]
+
+	batches.Put(batch)
+}
+
 // MetricsStorage сохраняет весь пакет разом: и хранилище в памяти, и база
-// применяют его целиком, поэтому частично принятых пакетов не бывает.
+// применяют его целиком, поэтому частично принятых пакетов не бывает. Слайс после
+// возврата из SaveBatch использовать нельзя: он вернётся в пул.
 type MetricsStorage interface {
 	SaveBatch(ctx context.Context, metrics []model.Metrics) error
+}
+
+// Auditor узнаёт о принятых метриках; кому он передаст событие, хендлеру неважно.
+// Enabled позволяет не собирать событие, когда его некому отправить.
+type Auditor interface {
+	Enabled() bool
+	Notify(event audit.Event)
 }
 
 // reject отвечает клиенту и пишет причину отказа в лог: middleware логирует
@@ -49,13 +92,17 @@ func validate(m model.Metrics) (int, string) {
 	return 0, ""
 }
 
-func New(storage MetricsStorage, l *slog.Logger) http.HandlerFunc {
+func New(storage MetricsStorage, auditor Auditor, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var metrics []model.Metrics
-		if err := json.NewDecoder(r.Body).Decode(&metrics); err != nil {
+		batch := batches.Get().(*[]model.Metrics)
+		defer putBatch(batch)
+
+		if err := httpbody.DecodeJSON(r.Body, batch); err != nil {
 			reject(l, w, http.StatusBadRequest, "invalid json body", slog.Any("error", err))
 			return
 		}
+
+		metrics := *batch
 
 		// Пакет проверяется целиком до записи: принять половину и отказать
 		// на второй значило бы оставить хранилище в состоянии, о котором
@@ -81,6 +128,21 @@ func New(storage MetricsStorage, l *slog.Logger) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write(okResponse)
+
+		// В пустом пакете не было метрик — значит, и сообщать аудиту не о чем. Имена
+		// собираются, только если есть кому их отправить: по умолчанию аудит выключен.
+		if len(metrics) > 0 && auditor.Enabled() {
+			auditor.Notify(audit.NewEvent(r, metricNames(metrics)...))
+		}
 	}
+}
+
+func metricNames(metrics []model.Metrics) []string {
+	names := make([]string, len(metrics))
+	for i, m := range metrics {
+		names[i] = m.ID
+	}
+
+	return names
 }
