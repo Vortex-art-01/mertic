@@ -15,6 +15,10 @@ import (
 	"github.com/Vortex-art-01/mertic/internal/retry"
 )
 
+// Client отправляет метрики на сервер. Тело запроса он сжимает gzip, а если
+// задан ключ, передаёт в заголовке HashSHA256 подпись HMAC-SHA256 от несжатого
+// тела. Отправку, которая не дошла до сервера или получила в ответ 429 или 5xx,
+// клиент повторяет с паузами 1s, 3s, 5s.
 type Client struct {
 	baseURL    string
 	key        string
@@ -22,6 +26,8 @@ type Client struct {
 	delays     []time.Duration
 }
 
+// NewClient возвращает клиент сервера по адресу baseURL со схемой, например
+// http://localhost:8080. Пустой key выключает подпись.
 func NewClient(baseURL, key string) *Client {
 	return &Client{
 		baseURL:    baseURL,
@@ -31,6 +37,10 @@ func NewClient(baseURL, key string) *Client {
 	}
 }
 
+// SendBatch отправляет метрики одним запросом POST /updates/; пустой пакет не
+// отправляется. Если сервер так и не принял пакет, ошибка содержит
+// [*TransportError], когда сервер недоступен, или [*StatusError], когда он
+// ответил не 200; достать их можно через errors.As.
 func (c *Client) SendBatch(ctx context.Context, metrics []model.Metrics) error {
 	if len(metrics) == 0 {
 		return nil

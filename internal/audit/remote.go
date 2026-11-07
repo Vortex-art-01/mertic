@@ -34,6 +34,9 @@ func NewRemote(rawURL string) (*Remote, error) {
 	return &Remote{url: rawURL, httpClient: &http.Client{}}, nil
 }
 
+// Update отправляет событие в теле POST-запроса с Content-Type: application/json.
+// Ответ с кодом вне 2xx считается ошибкой. Адреса в ошибке нет: ошибки уходят в
+// лог, а в URL может быть токен доступа.
 func (r *Remote) Update(ctx context.Context, event Event) error {
 	body, err := json.Marshal(event)
 	if err != nil {

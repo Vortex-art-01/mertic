@@ -190,6 +190,15 @@ func (r *compressReader) release() {
 	gzipReaders.Put(r)
 }
 
+// WithGzip поддерживает gzip в обе стороны. Тело запроса с заголовком
+// Content-Encoding: gzip мидлварь распаковывает, а запрос, тело которого не
+// похоже на gzip, отклоняет с кодом 400. Ответ клиенту, приславшему
+// Accept-Encoding: gzip, она сжимает, если его Content-Type — application/json
+// или text/html; остальные ответы уходят как есть. Хендлер за мидлварью читает и
+// пишет несжатые данные.
+//
+// Ответ до 256 байт уходит gzip-потоком без сжатия: для клиента это обычный gzip,
+// а держать ради нескольких байт компрессор на 800 КБ незачем.
 func WithGzip(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if sentGzip(r) {

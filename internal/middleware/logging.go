@@ -27,6 +27,8 @@ func (w *responseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// WithLogging пишет в log запись уровня Info о каждом запросе: URI, метод, код
+// ответа, размер тела ответа в байтах и длительность обработки.
 func WithLogging(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

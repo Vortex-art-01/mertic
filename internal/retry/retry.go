@@ -25,6 +25,10 @@ func Do(ctx context.Context, retriable func(error) bool, fn func() error) error 
 	return DoWith(ctx, defaultDelays, retriable, fn)
 }
 
+// DoWith вызывает fn и, пока та завершается ошибкой, для которой retriable
+// возвращает true, повторяет вызов после очередной паузы из delays: всего не
+// больше len(delays)+1 вызовов. Возвращает ошибку последнего вызова или nil.
+// Если ctx отменён во время паузы, к ошибке fn добавляется ошибка контекста.
 func DoWith(ctx context.Context, delays []time.Duration, retriable func(error) bool, fn func() error) error {
 	err := fn()
 

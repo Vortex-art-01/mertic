@@ -92,6 +92,20 @@ func validate(m model.Metrics) (int, string) {
 	return 0, ""
 }
 
+// New возвращает хендлер POST /updates/. Тело запроса — JSON-массив
+// [model.Metrics], и к каждой метрике те же требования, что у POST /update/.
+// Пакет проверяется целиком до записи и сохраняется одним вызовом
+// [MetricsStorage.SaveBatch], поэтому принимается либо весь, либо никак. Пустой
+// массив — не ошибка: хендлер ответит 200, ничего не записав.
+//
+// Ответы:
+//   - 200 с телом {"status":"ok"} — пакет сохранён;
+//   - 400 — тело не JSON-массив или в пакете есть метрика неизвестного типа
+//     либо без значения;
+//   - 404 — в пакете есть метрика с пустым именем;
+//   - 500 — сбой хранилища, подробности уходят в лог l.
+//
+// О принятом пакете хендлер сообщает auditor одним событием со всеми именами.
 func New(storage MetricsStorage, auditor Auditor, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		batch := batches.Get().(*[]model.Metrics)

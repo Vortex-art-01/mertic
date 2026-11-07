@@ -1,3 +1,4 @@
+// Package index отдаёт HTML-страницу со всеми метриками: GET /.
 package index
 
 import (
@@ -9,6 +10,7 @@ import (
 	"strconv"
 )
 
+// MetricsLister возвращает все метрики разом. Хендлер полученные карты не меняет.
 type MetricsLister interface {
 	Gauges(ctx context.Context) (map[string]float64, error)
 	Counters(ctx context.Context) (map[string]int64, error)
@@ -40,6 +42,13 @@ const (
 	rowSize = 64
 )
 
+// New возвращает хендлер GET /: HTML-страницу, где каждая метрика — строка
+// списка «имя = значение». Сначала идут gauge, затем counter, внутри группы —
+// по имени. Имена экранируются, поэтому имя метрики не внедрит в страницу
+// разметку.
+//
+// Ответы: 200 со страницей (Content-Type: text/html) или 500 при сбое
+// хранилища, подробности которого уходят в лог l.
 func New(lister MetricsLister, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		gauges, err := lister.Gauges(r.Context())

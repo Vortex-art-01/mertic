@@ -14,12 +14,16 @@ import (
 	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
+// MemStorage хранит метрики в памяти процесса. Все методы работают под одним
+// мьютексом, поэтому хранилище можно использовать из нескольких горутин. Между
+// перезапусками сервера метрики сохраняет пакет dump.
 type MemStorage struct {
 	mu       sync.Mutex
 	gauges   map[string]float64
 	counters map[string]int64
 }
 
+// NewMemStorage возвращает пустое хранилище.
 func NewMemStorage() *MemStorage {
 	return &MemStorage{
 		gauges:   make(map[string]float64),
@@ -27,6 +31,7 @@ func NewMemStorage() *MemStorage {
 	}
 }
 
+// SaveGauge записывает значение gauge, заменяя прежнее.
 func (s *MemStorage) SaveGauge(_ context.Context, name string, value float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -34,6 +39,8 @@ func (s *MemStorage) SaveGauge(_ context.Context, name string, value float64) er
 	return nil
 }
 
+// AddCounter прибавляет value к счётчику name. Счётчик, которого ещё нет,
+// начинается с нуля.
 func (s *MemStorage) AddCounter(_ context.Context, name string, value int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -56,7 +63,8 @@ func (s *MemStorage) SetCounter(_ context.Context, name string, value int64) err
 //
 // Повторяющиеся имена внутри пакета обрабатываются так же, как отдельные
 // запросы: у gauge остаётся последнее значение, приращения counter
-// складываются.
+// складываются. Метрики без значения и неизвестных типов пропускаются:
+// проверять пакет — забота хендлера.
 func (s *MemStorage) SaveBatch(_ context.Context, metrics []model.Metrics) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -77,6 +85,7 @@ func (s *MemStorage) SaveBatch(_ context.Context, metrics []model.Metrics) error
 	return nil
 }
 
+// GetGauge возвращает значение gauge и признак, есть ли такая метрика.
 func (s *MemStorage) GetGauge(_ context.Context, name string) (float64, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -84,6 +93,8 @@ func (s *MemStorage) GetGauge(_ context.Context, name string) (float64, bool, er
 	return v, ok, nil
 }
 
+// GetCounter возвращает накопленное значение счётчика и признак, есть ли такая
+// метрика.
 func (s *MemStorage) GetCounter(_ context.Context, name string) (int64, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -91,12 +102,15 @@ func (s *MemStorage) GetCounter(_ context.Context, name string) (int64, bool, er
 	return v, ok, nil
 }
 
+// Gauges возвращает копию всех gauge: менять её можно, хранилище это не затронет.
 func (s *MemStorage) Gauges(_ context.Context) (map[string]float64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return maps.Clone(s.gauges), nil
 }
 
+// Counters возвращает копию всех счётчиков: менять её можно, хранилище это не
+// затронет.
 func (s *MemStorage) Counters(_ context.Context) (map[string]int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

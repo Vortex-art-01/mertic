@@ -19,7 +19,11 @@ const (
 	closeTimeout = 5 * time.Second
 )
 
-// Observer — приёмник событий аудита.
+// Observer — приёмник событий аудита. [Subject] вызывает Update из отдельной
+// горутины, по одному событию за раз и в порядке поступления. Контекст
+// ограничивает одну доставку пятью секундами, а при остановке отменяется, если
+// очередь не успела разобраться (см. [Subject.Close]). Ошибку Update субъект
+// пишет в лог; повторов нет.
 type Observer interface {
 	Update(ctx context.Context, event Event) error
 }
@@ -40,6 +44,9 @@ type Subject struct {
 	queues []chan Event
 }
 
+// NewSubject возвращает субъект без наблюдателей: пока никто не подписан через
+// [Subject.Register], [Subject.Notify] ничего не делает. Ошибки доставки субъект
+// пишет в l. Когда события больше не нужны, вызовите [Subject.Close].
 func NewSubject(l *slog.Logger) *Subject {
 	ctx, cancel := context.WithCancel(context.Background())
 

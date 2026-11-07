@@ -1,3 +1,5 @@
+// Package valuejson отдаёт значение метрики в JSON: POST /value/ с телом
+// [model.Metrics].
 package valuejson
 
 import (
@@ -10,6 +12,8 @@ import (
 	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
+// ValueGetter читает текущее значение метрики. Второй результат сообщает, есть
+// ли метрика с таким именем: её отсутствие — не ошибка.
 type ValueGetter interface {
 	GetGauge(ctx context.Context, name string) (float64, bool, error)
 	GetCounter(ctx context.Context, name string) (int64, bool, error)
@@ -23,6 +27,17 @@ func reject(l *slog.Logger, w http.ResponseWriter, code int, reason string, attr
 	http.Error(w, reason, code)
 }
 
+// New возвращает хендлер POST /value/. В теле запроса — [model.Metrics] с
+// именем и типом, в ответе — та же метрика с текущим значением:
+//
+//	запрос: {"id":"Alloc","type":"gauge"}
+//	ответ:  {"id":"Alloc","type":"gauge","value":1024.5}
+//
+// Ответы:
+//   - 200 с метрикой в JSON — метрика найдена;
+//   - 400 — тело не JSON;
+//   - 404 — тип неизвестен или метрики с таким именем нет;
+//   - 500 — сбой хранилища, подробности уходят в лог l.
 func New(getter ValueGetter, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var m model.Metrics

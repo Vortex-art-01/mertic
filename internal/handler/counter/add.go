@@ -1,3 +1,4 @@
+// Package counter обновляет счётчик через URL: POST /update/counter/{name}/{value}.
 package counter
 
 import (
@@ -9,6 +10,8 @@ import (
 	"github.com/Vortex-art-01/mertic/internal/audit"
 )
 
+// CounterSaver прибавляет приращение к счётчику: сервер хранит сумму всех
+// присланных значений.
 type CounterSaver interface {
 	AddCounter(ctx context.Context, name string, value int64) error
 }
@@ -18,6 +21,17 @@ type Auditor interface {
 	Notify(event audit.Event)
 }
 
+// New возвращает хендлер POST /update/counter/{name}/{value}: он прибавляет
+// value к счётчику name. Имя и приращение хендлер берёт из параметров пути name
+// и value, поэтому маршрут должен их объявлять.
+//
+// Ответы:
+//   - 200 без тела — приращение учтено;
+//   - 400 — value не разбирается как int64;
+//   - 404 — имя пустое;
+//   - 500 — сбой хранилища, подробности уходят в лог l.
+//
+// О каждой принятой метрике хендлер сообщает auditor.
 func New(saver CounterSaver, auditor Auditor, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")

@@ -11,9 +11,15 @@ import (
 
 // Event — событие аудита: какие метрики, когда и с какого адреса принял сервер.
 type Event struct {
-	TS        int64    `json:"ts"`
-	Metrics   []string `json:"metrics"`
-	IPAddress string   `json:"ip_address"`
+	// TS — время события, Unix-время в секундах.
+	TS int64 `json:"ts"`
+
+	// Metrics — имена принятых метрик. На пакет из POST /updates/ приходится одно
+	// событие со всеми именами.
+	Metrics []string `json:"metrics"`
+
+	// IPAddress — адрес клиента из соединения, без порта.
+	IPAddress string `json:"ip_address"`
 }
 
 // NewEvent формирует событие о метриках, принятых в запросе r.

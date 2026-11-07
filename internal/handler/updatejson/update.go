@@ -1,3 +1,5 @@
+// Package updatejson обновляет одну метрику через JSON: POST /update/ с телом
+// [model.Metrics].
 package updatejson
 
 import (
@@ -42,6 +44,22 @@ func fail(l *slog.Logger, w http.ResponseWriter, m model.Metrics, err error) {
 	http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 }
 
+// New возвращает хендлер POST /update/. Тело запроса — [model.Metrics]: у gauge
+// обязательно поле value, у counter — delta. В ответ приходит та же метрика с
+// актуальным значением; для counter это накопленная сумма, а не присланная
+// delta. Например, если счётчик Requests равен 5:
+//
+//	запрос: {"id":"Requests","type":"counter","delta":3}
+//	ответ:  {"id":"Requests","type":"counter","delta":8}
+//
+// Ответы:
+//   - 200 с метрикой в JSON — метрика сохранена;
+//   - 400 — тело не JSON, тип неизвестен или нет значения;
+//   - 404 — имя пустое;
+//   - 500 — сбой хранилища, подробности уходят в лог l.
+//
+// Причину отказа хендлер тоже пишет в лог: у всех метрик один URI, и по записи о
+// запросе её не восстановить. О каждой принятой метрике хендлер сообщает auditor.
 func New(storage MetricsStorage, auditor Auditor, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var m model.Metrics

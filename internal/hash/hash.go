@@ -1,3 +1,6 @@
+// Package hash подписывает тела запросов и ответов по HMAC-SHA256. Подпись в hex
+// передаётся в заголовке [Header]: агент подписывает отправляемые пакеты, а
+// сервер проверяет присланные подписи и подписывает свои ответы.
 package hash
 
 import (
@@ -76,6 +79,7 @@ func (m *mac) valid(data []byte, want string) bool {
 	return hmac.Equal(decoded[:], m.compute(data))
 }
 
+// NewSigner возвращает Signer с ключом key.
 func NewSigner(key string) *Signer {
 	s := &Signer{}
 	s.macs.New = func() any { return newMAC(key) }
