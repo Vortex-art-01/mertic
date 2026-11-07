@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Vortex-art-01/mertic/internal/audit"
 	"github.com/Vortex-art-01/mertic/internal/dump"
 	"github.com/Vortex-art-01/mertic/internal/model"
 	"github.com/Vortex-art-01/mertic/internal/repository"
@@ -25,7 +26,7 @@ func TestSyncStorageWritesDumpOnUpdate(t *testing.T) {
 		dump.Config{Path: path}, l)
 	defer dumps.Close()
 
-	ts := httptest.NewServer(newRouter(routerDeps{storage: storage, log: l}))
+	ts := httptest.NewServer(newRouter(routerDeps{storage: storage, auditor: audit.NewSubject(l), log: l}))
 	defer ts.Close()
 
 	res, err := ts.Client().Post(ts.URL+"/update", "application/json",
@@ -64,7 +65,7 @@ func TestSyncStorageWritesDumpOnBatchUpdate(t *testing.T) {
 		dump.Config{Path: path}, l)
 	defer dumps.Close()
 
-	ts := httptest.NewServer(newRouter(routerDeps{storage: storage, log: l}))
+	ts := httptest.NewServer(newRouter(routerDeps{storage: storage, auditor: audit.NewSubject(l), log: l}))
 	defer ts.Close()
 
 	res, err := ts.Client().Post(ts.URL+"/updates/", "application/json",

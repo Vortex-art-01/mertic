@@ -15,18 +15,24 @@ import (
 
 const pollCountMetric = "PollCount"
 
+// Collector накапливает метрики между отправками: последние значения gauge и
+// число опросов с прошлой отправки — PollCount. Методы можно вызывать из
+// нескольких горутин.
 type Collector struct {
 	mu        sync.Mutex
 	gauges    map[string]float64
 	pollCount int64
 }
 
+// NewCollector возвращает пустой Collector.
 func NewCollector() *Collector {
 	return &Collector{
 		gauges: make(map[string]float64),
 	}
 }
 
+// PollRuntime снимает 27 метрик runtime.MemStats и случайное число RandomValue и
+// увеличивает PollCount на единицу.
 func (c *Collector) PollRuntime() {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
@@ -66,6 +72,9 @@ func (c *Collector) PollRuntime() {
 	c.pollCount++
 }
 
+// PollSystem снимает системные метрики через gopsutil: TotalMemory, FreeMemory и
+// загрузку каждого ядра CPU в процентах — CPUutilization1, CPUutilization2 и так
+// далее. PollCount не меняется.
 func (c *Collector) PollSystem(ctx context.Context) error {
 	memory, err := mem.VirtualMemoryWithContext(ctx)
 	if err != nil {
@@ -94,6 +103,9 @@ func cpuUtilizationMetric(core int) string {
 	return "CPUutilization" + strconv.Itoa(core)
 }
 
+// Take возвращает копию собранных gauge и число опросов с прошлого вызова Take,
+// обнуляя его. Сами gauge остаются: до следующего опроса они уходят на сервер с
+// прежними значениями.
 func (c *Collector) Take() (map[string]float64, int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -107,6 +119,8 @@ func (c *Collector) Take() (map[string]float64, int64) {
 	return gauges, delta
 }
 
+// AddPollCount возвращает к счётчику опросов delta, полученную из Take, если
+// пакет с ней не удалось отправить.
 func (c *Collector) AddPollCount(delta int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

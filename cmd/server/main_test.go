@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Vortex-art-01/mertic/internal/audit"
 	"github.com/Vortex-art-01/mertic/internal/model"
 	"github.com/Vortex-art-01/mertic/internal/repository"
 )
@@ -20,7 +21,9 @@ func TestRouter(t *testing.T) {
 	_ = repo.SaveGauge(t.Context(), "Alloc", 123.45)
 	_ = repo.AddCounter(t.Context(), "PollCount", 5)
 
-	ts := httptest.NewServer(newRouter(routerDeps{storage: repo, log: slog.New(slog.DiscardHandler)}))
+	l := slog.New(slog.DiscardHandler)
+
+	ts := httptest.NewServer(newRouter(routerDeps{storage: repo, auditor: audit.NewSubject(l), log: l}))
 	defer ts.Close()
 
 	tests := []struct {

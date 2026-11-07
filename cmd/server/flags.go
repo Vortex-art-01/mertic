@@ -15,6 +15,9 @@ type config struct {
 	restore       bool
 	databaseDSN   string
 	key           string
+	auditFile     string
+	auditURL      string
+	pprofAddr     string
 }
 
 func parseFlags() config {
@@ -25,6 +28,9 @@ func parseFlags() config {
 		restore       bool
 		databaseDSN   string
 		key           string
+		auditFile     string
+		auditURL      string
+		pprofAddr     string
 	)
 
 	flag.StringVar(&runAddr, "a", "localhost:8080", "адрес эндпоинта HTTP-сервера")
@@ -34,6 +40,9 @@ func parseFlags() config {
 	flag.StringVar(&databaseDSN, "d", "", "строка подключения к базе данных PostgreSQL")
 	flag.StringVar(&key, "k", "",
 		"ключ подписи данных (пустой — не подписывать; с ключом сервер проверяет только запросы с подписью)")
+	flag.StringVar(&auditFile, "audit-file", "", "файл для логов аудита (пустой — в файл не писать)")
+	flag.StringVar(&auditURL, "audit-url", "", "полный URL для логов аудита (пустой — на сервер не отправлять)")
+	flag.StringVar(&pprofAddr, "pprof-addr", "", "адрес профилировщика net/http/pprof (пустой — выключен)")
 
 	flag.Parse()
 
@@ -74,6 +83,18 @@ func parseFlags() config {
 		key = env
 	}
 
+	if env, ok := os.LookupEnv("AUDIT_FILE"); ok {
+		auditFile = env
+	}
+
+	if env, ok := os.LookupEnv("AUDIT_URL"); ok {
+		auditURL = env
+	}
+
+	if env, ok := os.LookupEnv("PPROF_ADDRESS"); ok {
+		pprofAddr = env
+	}
+
 	if storeInterval < 0 {
 		storeInterval = 0
 	}
@@ -85,5 +106,8 @@ func parseFlags() config {
 		restore:       restore,
 		databaseDSN:   databaseDSN,
 		key:           key,
+		auditFile:     auditFile,
+		auditURL:      auditURL,
+		pprofAddr:     pprofAddr,
 	}
 }

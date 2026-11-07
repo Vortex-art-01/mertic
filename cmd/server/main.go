@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Vortex-art-01/mertic/internal/audit"
 	"github.com/Vortex-art-01/mertic/internal/database"
 	"github.com/Vortex-art-01/mertic/internal/dump"
 	"github.com/Vortex-art-01/mertic/internal/handler/counter"
@@ -45,6 +46,21 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	auditor := audit.NewSubject(l)
+	defer auditor.Close()
+
+	if err := registerAuditObservers(auditor, cfg); err != nil {
+		return err
+	}
+
+	if cfg.pprofAddr != "" {
+		profiler, err := startPprof(cfg.pprofAddr, l)
+		if err != nil {
+			return err
+		}
+		defer profiler.Close()
+	}
+
 	var (
 		storage metricsStorage
 		pinger  ping.Pinger
@@ -73,6 +89,7 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 	srv := &http.Server{Addr: cfg.runAddr, Handler: newRouter(routerDeps{
 		storage: storage,
 		pinger:  pinger,
+		auditor: auditor,
 		key:     cfg.key,
 		log:     l,
 	})}
@@ -97,7 +114,10 @@ func run(ctx context.Context, cfg config, l *slog.Logger) error {
 		slog.String("file", cfg.fileStorage),
 		slog.Duration("store interval", cfg.storeInterval),
 		slog.Bool("restore", cfg.restore),
-		slog.Bool("signed", cfg.key != ""))
+		slog.Bool("signed", cfg.key != ""),
+		slog.String("audit file", cfg.auditFile),
+		slog.Bool("audit url", cfg.auditURL != ""),
+		slog.String("pprof", cfg.pprofAddr))
 
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -127,9 +147,34 @@ func storageKind(cfg config) string {
 	}
 }
 
+// registerAuditObservers подписывает приёмники, заданные в конфигурации. Если
+// не задан ни один, субъекту некого уведомлять — так аудит и выключается.
+func registerAuditObservers(subject *audit.Subject, cfg config) error {
+	if cfg.auditFile != "" {
+		file, err := audit.NewFile(cfg.auditFile)
+		if err != nil {
+			return err
+		}
+
+		subject.Register(file)
+	}
+
+	if cfg.auditURL != "" {
+		remote, err := audit.NewRemote(cfg.auditURL)
+		if err != nil {
+			return err
+		}
+
+		subject.Register(remote)
+	}
+
+	return nil
+}
+
 type routerDeps struct {
 	storage metricsStorage
 	pinger  ping.Pinger
+	auditor *audit.Subject
 	key     string
 	log     *slog.Logger
 }
@@ -141,8 +186,8 @@ func newRouter(deps routerDeps) http.Handler {
 	r.Use(middleware.WithGzip)
 	r.Use(middleware.WithHash(deps.key))
 
-	updateJSON := updatejson.New(deps.storage, deps.log)
-	updatesJSON := updatesjson.New(deps.storage, deps.log)
+	updateJSON := updatejson.New(deps.storage, deps.auditor, deps.log)
+	updatesJSON := updatesjson.New(deps.storage, deps.auditor, deps.log)
 	valueJSON := valuejson.New(deps.storage, deps.log)
 
 	r.Get("/", index.New(deps.storage, deps.log))
@@ -156,8 +201,8 @@ func newRouter(deps routerDeps) http.Handler {
 	r.Post("/value", valueJSON)
 	r.Post("/value/", valueJSON)
 
-	r.Post("/update/gauge/{name}/{value}", gauge.New(deps.storage, deps.log))
-	r.Post("/update/counter/{name}/{value}", counter.New(deps.storage, deps.log))
+	r.Post("/update/gauge/{name}/{value}", gauge.New(deps.storage, deps.auditor, deps.log))
+	r.Post("/update/counter/{name}/{value}", counter.New(deps.storage, deps.auditor, deps.log))
 	r.Post("/update/{type}/{name}/{value}", unknowntype.New())
 
 	return r

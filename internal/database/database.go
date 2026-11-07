@@ -23,6 +23,10 @@ const (
 	connectTimeout  = 5 * time.Second
 )
 
+// New открывает пул соединений с PostgreSQL по строке подключения dsn,
+// дожидается ответа базы и применяет миграции из пакета migrations. При
+// временных ошибках подключение повторяется с паузами 1s, 3s, 5s, а каждая
+// попытка ограничена пятью секундами. Пул закрывает вызывающий.
 func New(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
