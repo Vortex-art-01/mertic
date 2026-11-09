@@ -8,12 +8,52 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Vortex-art-01/mertic/internal/hash"
+	"github.com/Vortex-art-01/mertic/internal/httpbody"
 	"github.com/Vortex-art-01/mertic/internal/middleware"
 )
+
+// Тело больше предела хендлер дочитать не может: чтение обрывается ошибкой
+// *http.MaxBytesError, и хендлер отвечает кодом 413. Битый JSON в пределах
+// лимита — по-прежнему 400: клиенту важно, уменьшать запрос или исправлять.
+func ExampleWithBodyLimit() {
+	router := chi.NewRouter()
+	router.Use(middleware.WithBodyLimit(16))
+	router.Post("/update", func(w http.ResponseWriter, r *http.Request) {
+		var m struct {
+			ID string `json:"id"`
+		}
+		if err := httpbody.DecodeJSON(r.Body, &m); err != nil {
+			code, reason := httpbody.ErrorStatus(err)
+			http.Error(w, reason, code)
+			return
+		}
+
+		fmt.Fprintf(w, "accepted %s", m.ID)
+	})
+
+	for _, body := range []string{
+		`{"id":"Alloc"}`,
+		`{"id":"HeapAlloc","type":"gauge"}`,
+		`{"id":`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/update", strings.NewReader(body))
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		fmt.Printf("%d bytes: %d %s\n", len(body), rec.Code, strings.TrimSpace(rec.Body.String()))
+	}
+
+	// Output:
+	// 14 bytes: 200 accepted Alloc
+	// 33 bytes: 413 request body too large
+	// 6 bytes: 400 invalid json body
+}
 
 // Клиент сжимает тело запроса и сообщает об этом заголовком Content-Encoding, а
 // заголовком Accept-Encoding просит сжатый ответ. Хендлер за мидлварью читает и

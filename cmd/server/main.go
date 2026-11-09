@@ -31,7 +31,14 @@ import (
 	"github.com/Vortex-art-01/mertic/internal/repository"
 )
 
-const shutdownTimeout = 5 * time.Second
+const (
+	shutdownTimeout = 5 * time.Second
+
+	// maxRequestBody — предел тела запроса после распаковки. Пакет агента из
+	// нескольких десятков метрик занимает единицы килобайт, так что мегабайта
+	// хватает с большим запасом, а занять всю память сервера один запрос не сможет.
+	maxRequestBody = 1 << 20
+)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -184,6 +191,9 @@ func newRouter(deps routerDeps) http.Handler {
 
 	r.Use(middleware.WithLogging(deps.log))
 	r.Use(middleware.WithGzip)
+	// Предел стоит после распаковки, чтобы ограничить то, что ляжет в память, и
+	// перед подписью: WithHash читает тело целиком ещё до хендлера.
+	r.Use(middleware.WithBodyLimit(maxRequestBody))
 	r.Use(middleware.WithHash(deps.key))
 
 	updateJSON := updatejson.New(deps.storage, deps.auditor, deps.log)

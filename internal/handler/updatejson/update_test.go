@@ -17,8 +17,11 @@ import (
 )
 
 type mockAuditor struct {
-	events []audit.Event
+	events   []audit.Event
+	disabled bool
 }
+
+func (m *mockAuditor) Enabled() bool { return !m.disabled }
 
 func (m *mockAuditor) Notify(event audit.Event) {
 	m.events = append(m.events, event)
@@ -261,6 +264,28 @@ func TestNewReportsStorageFailure(t *testing.T) {
 				t.Errorf("storage error not logged, got:\n%s", logs)
 			}
 		})
+	}
+}
+
+// С выключенным аудитом событие не собирается и никому не отправляется.
+func TestNewSkipsEventWhenAuditIsDisabled(t *testing.T) {
+	storage := newMockStorage()
+	auditor := &mockAuditor{disabled: true}
+
+	req := httptest.NewRequest(http.MethodPost, "/update",
+		strings.NewReader(`{"id":"Alloc","type":"gauge","value":1}`))
+	w := httptest.NewRecorder()
+
+	New(storage, auditor, slog.New(slog.DiscardHandler))(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if _, ok := storage.gauges["Alloc"]; !ok {
+		t.Error("gauge was not stored")
+	}
+	if len(auditor.events) != 0 {
+		t.Errorf("events = %+v, want none", auditor.events)
 	}
 }
 

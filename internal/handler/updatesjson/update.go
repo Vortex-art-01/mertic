@@ -103,16 +103,19 @@ func validate(m model.Metrics) (int, string) {
 //   - 400 — тело не JSON-массив или в пакете есть метрика неизвестного типа
 //     либо без значения;
 //   - 404 — в пакете есть метрика с пустым именем;
+//   - 413 — тело больше предела, который ставит middleware.WithBodyLimit;
 //   - 500 — сбой хранилища, подробности уходят в лог l.
 //
-// О принятом пакете хендлер сообщает auditor одним событием со всеми именами.
+// О принятом пакете хендлер сообщает auditor одним событием со всеми именами,
+// если аудит включён.
 func New(storage MetricsStorage, auditor Auditor, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		batch := batches.Get().(*[]model.Metrics)
 		defer putBatch(batch)
 
 		if err := httpbody.DecodeJSON(r.Body, batch); err != nil {
-			reject(l, w, http.StatusBadRequest, "invalid json body", slog.Any("error", err))
+			code, reason := httpbody.ErrorStatus(err)
+			reject(l, w, code, reason, slog.Any("error", err))
 			return
 		}
 

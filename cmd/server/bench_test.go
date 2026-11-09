@@ -53,17 +53,17 @@ func benchBatchJSON(b *testing.B) []byte {
 	return data
 }
 
-func benchGzip(b *testing.B, data []byte) []byte {
-	b.Helper()
+func gzipped(tb testing.TB, data []byte) []byte {
+	tb.Helper()
 
 	var buf bytes.Buffer
 
 	zw := gzip.NewWriter(&buf)
 	if _, err := zw.Write(data); err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 	if err := zw.Close(); err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 
 	return buf.Bytes()
@@ -93,7 +93,7 @@ func BenchmarkRouter(b *testing.B) {
 	}{
 		{
 			name:   "updates_agent", // главный сценарий: сжатый подписанный пакет
-			method: http.MethodPost, path: "/updates/", body: benchGzip(b, batch),
+			method: http.MethodPost, path: "/updates/", body: gzipped(b, batch),
 			headers: agentHeaders, key: benchKey,
 		},
 		{
@@ -152,13 +152,18 @@ func BenchmarkRouter(b *testing.B) {
 
 			w := &discardWriter{header: make(http.Header)}
 			reader := bytes.NewReader(nil)
-			readCloser := io.NopCloser(reader)
+
+			// Как и на настоящем сервере, у запроса без тела r.Body — http.NoBody.
+			var body io.ReadCloser = http.NoBody
+			if tt.body != nil {
+				body = io.NopCloser(reader)
+			}
 
 			b.ReportAllocs()
 			for b.Loop() {
 				clear(w.header)
 				reader.Reset(tt.body)
-				req.Body = readCloser
+				req.Body = body
 
 				router.ServeHTTP(w, req)
 

@@ -110,9 +110,15 @@ func BenchmarkWithLogging(b *testing.B) {
 	benchServe(b, WithLogging(logger.New(io.Discard))(drainAndReply), req, []byte(benchBody))
 }
 
+func BenchmarkWithBodyLimit(b *testing.B) {
+	req := httptest.NewRequest(http.MethodPost, "/updates/", nil)
+
+	benchServe(b, WithBodyLimit(1<<20)(drainAndReply), req, []byte(benchBody))
+}
+
 // Вся цепочка в том порядке, как на сервере, на запросе агента.
 func BenchmarkMiddlewareChain(b *testing.B) {
-	handler := WithLogging(logger.New(io.Discard))(WithGzip(WithHash(testKey)(drainAndReply)))
+	handler := WithLogging(logger.New(io.Discard))(WithGzip(WithBodyLimit(1 << 20)(WithHash(testKey)(drainAndReply))))
 
 	req := httptest.NewRequest(http.MethodPost, "/updates/", nil)
 	req.Header.Set("Content-Encoding", "gzip")

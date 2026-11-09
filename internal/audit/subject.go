@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -40,8 +41,11 @@ type Subject struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	// mu защищает очереди и closed: Close может прийти одновременно с Register
+	// или Notify.
 	mu     sync.Mutex
 	queues []chan Event
+	closed bool
 }
 
 // NewSubject возвращает субъект без наблюдателей: пока никто не подписан через
@@ -53,14 +57,25 @@ func NewSubject(l *slog.Logger) *Subject {
 	return &Subject{log: l, ctx: ctx, cancel: cancel}
 }
 
-// Register подписывает наблюдателя на события.
+// Register подписывает наблюдателя на события. После [Subject.Close] подписаться
+// уже нельзя: событий больше не будет, а горутина наблюдателя ждала бы их вечно.
+// Такой вызов ничего не делает и оставляет запись в логе.
 func (s *Subject) Register(o Observer) {
-	queue := make(chan Event, queueSize)
-
 	s.mu.Lock()
-	s.queues = append(s.queues, queue)
-	s.mu.Unlock()
+	defer s.mu.Unlock()
 
+	if s.closed {
+		s.log.Error("audit subject is closed, observer ignored",
+			slog.String("observer", fmt.Sprintf("%T", o)))
+		return
+	}
+
+	queue := make(chan Event, queueSize)
+	s.queues = append(s.queues, queue)
+
+	// Горутина учитывается в workers под тем же мьютексом, что и очередь. Иначе
+	// Close мог бы закрыть очередь и дождаться workers раньше, чем горутина в них
+	// попадёт, и вернуть управление, пока она ещё работает.
 	s.workers.Go(func() {
 		for event := range queue {
 			s.deliver(o, event)
@@ -97,11 +112,14 @@ func (s *Subject) Notify(event Event) {
 
 // Close дожидается доставки накопленных событий, но не дольше closeTimeout:
 // после него незавершённые доставки отменяются, а события остаются в логе.
+// После Close субъект выключен: [Subject.Enabled] возвращает false, события из
+// [Subject.Notify] никому не достаются, а [Subject.Register] никого не подписывает.
 func (s *Subject) Close() {
 	// Хендлер, переживший таймаут srv.Shutdown, может вызвать Notify и после
 	// Close. Без очередей его событие просто никому не достанется, а запись
 	// в закрытый канал уронила бы сервер.
 	s.mu.Lock()
+	s.closed = true
 	for _, queue := range s.queues {
 		close(queue)
 	}

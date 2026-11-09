@@ -17,7 +17,9 @@ type CounterSaver interface {
 }
 
 // Auditor узнаёт о принятых метриках; кому он передаст событие, хендлеру неважно.
+// Enabled позволяет не собирать событие, когда его некому отправить.
 type Auditor interface {
+	Enabled() bool
 	Notify(event audit.Event)
 }
 
@@ -31,7 +33,7 @@ type Auditor interface {
 //   - 404 — имя пустое;
 //   - 500 — сбой хранилища, подробности уходят в лог l.
 //
-// О каждой принятой метрике хендлер сообщает auditor.
+// О каждой принятой метрике хендлер сообщает auditor, если аудит включён.
 func New(saver CounterSaver, auditor Auditor, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
@@ -56,6 +58,10 @@ func New(saver CounterSaver, auditor Auditor, l *slog.Logger) http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 
-		auditor.Notify(audit.NewEvent(r, name))
+		// Событие собирается, только если есть кому его отправить: по умолчанию
+		// аудит выключен.
+		if auditor.Enabled() {
+			auditor.Notify(audit.NewEvent(r, name))
+		}
 	}
 }

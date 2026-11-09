@@ -3,6 +3,10 @@ package httpbody
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -73,6 +77,68 @@ func TestDecodeJSONResultDoesNotReferToBuffer(t *testing.T) {
 
 	if first.ID != "Alloc" {
 		t.Errorf("first id = %q, want %q", first.ID, "Alloc")
+	}
+}
+
+// Тело больше предела — не то же самое, что битый JSON: клиенту нужен 413, чтобы
+// он понял, что запрос надо уменьшить, а не исправить.
+func TestErrorStatus(t *testing.T) {
+	syntaxErr := DecodeJSON(strings.NewReader(`{"id":`), new(map[string]string))
+
+	limited := http.MaxBytesReader(httptest.NewRecorder(), io.NopCloser(strings.NewReader(`{"id":"Alloc"}`)), 4)
+	limitErr := DecodeJSON(limited, new(map[string]string))
+
+	tests := []struct {
+		name         string
+		err          error
+		wantCode     int
+		wantReason   string
+		wantTooLarge bool
+	}{
+		{
+			name:         "body over the limit",
+			err:          limitErr,
+			wantCode:     http.StatusRequestEntityTooLarge,
+			wantReason:   "request body too large",
+			wantTooLarge: true,
+		},
+		{
+			name:         "wrapped limit error",
+			err:          fmt.Errorf("read body: %w", &http.MaxBytesError{Limit: 4}),
+			wantCode:     http.StatusRequestEntityTooLarge,
+			wantReason:   "request body too large",
+			wantTooLarge: true,
+		},
+		{
+			name:       "broken json",
+			err:        syntaxErr,
+			wantCode:   http.StatusBadRequest,
+			wantReason: "invalid json body",
+		},
+		{
+			name:       "read error",
+			err:        errors.New("connection lost"),
+			wantCode:   http.StatusBadRequest,
+			wantReason: "invalid json body",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.err == nil {
+				t.Fatal("DecodeJSON() must have failed")
+			}
+
+			if got := TooLarge(tt.err); got != tt.wantTooLarge {
+				t.Errorf("TooLarge(%v) = %t, want %t", tt.err, got, tt.wantTooLarge)
+			}
+
+			code, reason := ErrorStatus(tt.err)
+			if code != tt.wantCode || reason != tt.wantReason {
+				t.Errorf("ErrorStatus(%v) = %d %q, want %d %q",
+					tt.err, code, reason, tt.wantCode, tt.wantReason)
+			}
+		})
 	}
 }
 

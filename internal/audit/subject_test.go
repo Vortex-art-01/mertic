@@ -305,6 +305,38 @@ func TestDeliveryIsLimitedByTimeout(t *testing.T) {
 	})
 }
 
+// Наблюдатель, подписанный после Close, событий уже не получит, поэтому горутина
+// для него не запускается: она навсегда повисла бы на очереди, которую никто не
+// закроет. Такую горутину заметит и сам synctest.Test: он проваливает тест, если
+// в пузыре остаются заблокированные горутины.
+func TestRegisterAfterCloseIsIgnored(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var logs bytes.Buffer
+
+		observer := &recorder{}
+
+		subject := NewSubject(slog.New(slog.NewJSONHandler(&logs, nil)))
+		subject.Close()
+
+		subject.Register(observer)
+		subject.Notify(Event{TS: 1})
+		synctest.Wait()
+
+		if subject.Enabled() {
+			t.Error("Enabled() = true after Close")
+		}
+		if got := observer.timestamps(); len(got) != 0 {
+			t.Errorf("observer got %v after Close, want nothing", got)
+		}
+		// Подписка после Close — ошибка в коде сервера, и молча её терять нельзя.
+		for _, want := range []string{"audit subject is closed", "*audit.recorder"} {
+			if !strings.Contains(logs.String(), want) {
+				t.Errorf("log must contain %q, got:\n%s", want, logs.String())
+			}
+		}
+	})
+}
+
 // Хендлер может пережить таймаут srv.Shutdown и вызвать Notify уже после Close:
 // падать из-за него сервер не должен.
 func TestNotifyAfterCloseIsIgnored(t *testing.T) {

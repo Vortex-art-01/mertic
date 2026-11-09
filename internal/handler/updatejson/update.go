@@ -24,7 +24,9 @@ type MetricsStorage interface {
 }
 
 // Auditor узнаёт о принятых метриках; кому он передаст событие, хендлеру неважно.
+// Enabled позволяет не собирать событие, когда его некому отправить.
 type Auditor interface {
+	Enabled() bool
 	Notify(event audit.Event)
 }
 
@@ -56,15 +58,18 @@ func fail(l *slog.Logger, w http.ResponseWriter, m model.Metrics, err error) {
 //   - 200 с метрикой в JSON — метрика сохранена;
 //   - 400 — тело не JSON, тип неизвестен или нет значения;
 //   - 404 — имя пустое;
+//   - 413 — тело больше предела, который ставит middleware.WithBodyLimit;
 //   - 500 — сбой хранилища, подробности уходят в лог l.
 //
 // Причину отказа хендлер тоже пишет в лог: у всех метрик один URI, и по записи о
-// запросе её не восстановить. О каждой принятой метрике хендлер сообщает auditor.
+// запросе её не восстановить. О каждой принятой метрике хендлер сообщает auditor,
+// если аудит включён.
 func New(storage MetricsStorage, auditor Auditor, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var m model.Metrics
 		if err := httpbody.DecodeJSON(r.Body, &m); err != nil {
-			reject(l, w, http.StatusBadRequest, "invalid json body", slog.Any("error", err))
+			code, reason := httpbody.ErrorStatus(err)
+			reject(l, w, code, reason, slog.Any("error", err))
 			return
 		}
 
@@ -128,6 +133,10 @@ func New(storage MetricsStorage, auditor Auditor, l *slog.Logger) http.HandlerFu
 		w.WriteHeader(http.StatusOK)
 		_, _ = buf.WriteTo(w)
 
-		auditor.Notify(audit.NewEvent(r, m.ID))
+		// Событие собирается, только если есть кому его отправить: по умолчанию
+		// аудит выключен.
+		if auditor.Enabled() {
+			auditor.Notify(audit.NewEvent(r, m.ID))
+		}
 	}
 }

@@ -37,12 +37,14 @@ func reject(l *slog.Logger, w http.ResponseWriter, code int, reason string, attr
 //   - 200 с метрикой в JSON — метрика найдена;
 //   - 400 — тело не JSON;
 //   - 404 — тип неизвестен или метрики с таким именем нет;
+//   - 413 — тело больше предела, который ставит middleware.WithBodyLimit;
 //   - 500 — сбой хранилища, подробности уходят в лог l.
 func New(getter ValueGetter, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var m model.Metrics
 		if err := httpbody.DecodeJSON(r.Body, &m); err != nil {
-			reject(l, w, http.StatusBadRequest, "invalid json body", slog.Any("error", err))
+			code, reason := httpbody.ErrorStatus(err)
+			reject(l, w, code, reason, slog.Any("error", err))
 			return
 		}
 

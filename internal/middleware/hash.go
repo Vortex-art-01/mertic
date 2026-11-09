@@ -14,7 +14,9 @@ import (
 //
 // Подпись запроса проверяется, только если клиент её прислал: запрос без
 // заголовка или со значением [hash.None] проходит без проверки, а с неверной
-// подписью отклоняется с кодом 400. Почему так, объяснено у [hash.None].
+// подписью отклоняется с кодом 400. Почему так, объяснено у [hash.None]. Для
+// проверки тело читается в память целиком, поэтому перед WithHash должна стоять
+// [WithBodyLimit]: тело больше её предела отклоняется с кодом 413.
 //
 // Подписывается каждый ответ. Для этого мидлварь накапливает ответ хендлера в
 // памяти и отдаёт клиенту только целиком, так что потоковых ответов под ней нет.
@@ -35,7 +37,15 @@ func WithHash(key string) func(http.Handler) http.Handler {
 				body := httpbody.GetBuffer()
 				defer httpbody.PutBuffer(body)
 
+				// Тело читается целиком до проверки подписи, то есть от любого
+				// клиента, приславшего заголовок. Поэтому без WithBodyLimit перед
+				// этой мидлварью его размер ничем не ограничен.
 				if _, err := body.ReadFrom(r.Body); err != nil {
+					if httpbody.TooLarge(err) {
+						http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+						return
+					}
+
 					http.Error(w, "failed to read request body", http.StatusBadRequest)
 					return
 				}

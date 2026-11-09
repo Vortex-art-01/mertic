@@ -5,7 +5,9 @@ package httpbody
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
+	"net/http"
 	"sync"
 )
 
@@ -36,6 +38,10 @@ func PutBuffer(buf *bytes.Buffer) {
 //
 // В отличие от json.Decoder здесь не остаётся незамеченным мусор после JSON-значения:
 // такое тело считается ошибкой.
+//
+// Размер тела DecodeJSON не ограничивает: предел ставит middleware.WithBodyLimit на
+// весь роутер, потому что тело целиком читает и проверка подписи, ещё до хендлера.
+// На ошибку DecodeJSON отвечайте кодом из [ErrorStatus].
 func DecodeJSON(body io.Reader, v any) error {
 	buf := GetBuffer()
 	defer PutBuffer(buf)
@@ -45,4 +51,21 @@ func DecodeJSON(body io.Reader, v any) error {
 	}
 
 	return json.Unmarshal(buf.Bytes(), v)
+}
+
+// TooLarge сообщает, что чтение тела оборвалось на пределе размера: так отвечает
+// [http.MaxBytesReader], которым тело оборачивает middleware.WithBodyLimit.
+func TooLarge(err error) bool {
+	var tooLarge *http.MaxBytesError
+	return errors.As(err, &tooLarge)
+}
+
+// ErrorStatus подбирает ответ на ошибку [DecodeJSON]: 413, если тело больше
+// предела, и 400 на всё остальное — тело оборвалось или это не JSON.
+func ErrorStatus(err error) (code int, reason string) {
+	if TooLarge(err) {
+		return http.StatusRequestEntityTooLarge, "request body too large"
+	}
+
+	return http.StatusBadRequest, "invalid json body"
 }
