@@ -15,14 +15,23 @@ import (
 	"github.com/Vortex-art-01/mertic/internal/retry"
 )
 
+// Postgres хранит метрики в PostgreSQL: gauge — в таблице gauges, counter — в
+// таблице counters. Схему создают миграции при подключении, см. database.New.
+//
+// Запрос, завершившийся временной ошибкой — обрыв соединения, конфликт
+// транзакций, нехватка ресурсов, — повторяется с паузами 1s, 3s, 5s. Какие
+// ошибки считаются временными, решает pgerrors.Retriable.
 type Postgres struct {
 	pool *pgxpool.Pool
 }
 
+// NewPostgres возвращает хранилище, работающее через пул pool. Пул закрывает
+// вызывающий.
 func NewPostgres(pool *pgxpool.Pool) *Postgres {
 	return &Postgres{pool: pool}
 }
 
+// SaveGauge записывает значение gauge, заменяя прежнее.
 func (p *Postgres) SaveGauge(ctx context.Context, name string, value float64) error {
 	const query = `
 		INSERT INTO gauges (name, value) VALUES ($1, $2)
@@ -35,6 +44,8 @@ func (p *Postgres) SaveGauge(ctx context.Context, name string, value float64) er
 	return nil
 }
 
+// AddCounter прибавляет value к счётчику name. Складывает сама база, поэтому
+// параллельные приращения не теряются.
 func (p *Postgres) AddCounter(ctx context.Context, name string, value int64) error {
 	const query = `
 		INSERT INTO counters (name, delta) VALUES ($1, $2)
@@ -54,6 +65,10 @@ func (p *Postgres) exec(ctx context.Context, query string, args ...any) error {
 	})
 }
 
+// SaveBatch применяет пакет метрик одной транзакцией: если она не прошла, в базе
+// не остаётся ничего из пакета. Повторяющиеся имена обрабатываются так же, как
+// в [MemStorage.SaveBatch]: у gauge остаётся последнее значение, приращения
+// counter складываются. Метрики без значения и неизвестных типов пропускаются.
 func (p *Postgres) SaveBatch(ctx context.Context, metrics []model.Metrics) error {
 	gauges, counters := splitBatch(metrics)
 	if len(gauges) == 0 && len(counters) == 0 {
@@ -135,7 +150,8 @@ func addCounters(ctx context.Context, tx pgx.Tx, counters map[string]int64) erro
 }
 
 func splitBatch(metrics []model.Metrics) (map[string]float64, map[string]int64) {
-	gauges := make(map[string]float64)
+	// Почти весь пакет — gauge, поэтому их карта сразу рассчитана на весь пакет.
+	gauges := make(map[string]float64, len(metrics))
 	counters := make(map[string]int64)
 
 	for _, m := range metrics {
@@ -154,6 +170,7 @@ func splitBatch(metrics []model.Metrics) (map[string]float64, map[string]int64) 
 	return gauges, counters
 }
 
+// GetGauge возвращает значение gauge и признак, есть ли такая метрика.
 func (p *Postgres) GetGauge(ctx context.Context, name string) (float64, bool, error) {
 	const query = `SELECT value FROM gauges WHERE name = $1`
 
@@ -173,6 +190,8 @@ func (p *Postgres) GetGauge(ctx context.Context, name string) (float64, bool, er
 	return value, true, nil
 }
 
+// GetCounter возвращает накопленное значение счётчика и признак, есть ли такая
+// метрика.
 func (p *Postgres) GetCounter(ctx context.Context, name string) (int64, bool, error) {
 	const query = `SELECT delta FROM counters WHERE name = $1`
 
@@ -192,6 +211,7 @@ func (p *Postgres) GetCounter(ctx context.Context, name string) (int64, bool, er
 	return delta, true, nil
 }
 
+// Gauges возвращает все gauge.
 func (p *Postgres) Gauges(ctx context.Context) (map[string]float64, error) {
 	const query = `SELECT name, value FROM gauges`
 
@@ -226,6 +246,7 @@ func (p *Postgres) Gauges(ctx context.Context) (map[string]float64, error) {
 	return gauges, nil
 }
 
+// Counters возвращает все счётчики с накопленными значениями.
 func (p *Postgres) Counters(ctx context.Context) (map[string]int64, error) {
 	const query = `SELECT name, delta FROM counters`
 

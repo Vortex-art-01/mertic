@@ -11,10 +11,14 @@ import (
 // нужен, чтобы отличать такие ошибки от неудачно собранного запроса:
 // повторять есть смысл только их.
 type TransportError struct {
+	// URL — адрес запроса.
 	URL string
+
+	// Err — исходная ошибка http.Client.
 	Err error
 }
 
+// Error сообщает адрес и причину сбоя.
 func (e *TransportError) Error() string {
 	return fmt.Sprintf("connect to %s: %v", e.URL, e.Err)
 }
@@ -27,17 +31,21 @@ func (e *TransportError) Unwrap() error {
 
 // StatusError — сервер ответил кодом, отличным от 200.
 type StatusError struct {
-	Code   int
+	// Code — код ответа, например 503.
+	Code int
+
+	// Status — строка статуса, например «503 Service Unavailable».
 	Status string
 }
 
+// Error сообщает статус ответа.
 func (e *StatusError) Error() string {
 	return fmt.Sprintf("unexpected status %s", e.Status)
 }
 
-// Retriable: 5xx и 429 сервер выдаёт, когда ему сейчас плохо, — тот же
-// запрос может пройти позже. Остальные коды повторять бессмысленно:
-// от повтора запрос правильнее не станет.
+// Retriable сообщает, есть ли смысл повторить запрос. 5xx и 429 сервер выдаёт,
+// когда ему сейчас плохо, — тот же запрос может пройти позже. Остальные коды
+// повторять бессмысленно: от повтора запрос правильнее не станет.
 func (e *StatusError) Retriable() bool {
 	return e.Code == http.StatusTooManyRequests || e.Code >= http.StatusInternalServerError
 }

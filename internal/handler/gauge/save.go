@@ -1,3 +1,5 @@
+// Package gauge обновляет метрику типа gauge через URL:
+// POST /update/gauge/{name}/{value}.
 package gauge
 
 import (
@@ -5,13 +7,34 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+
+	"github.com/Vortex-art-01/mertic/internal/audit"
 )
 
+// GaugeSaver записывает значение gauge, заменяя прежнее.
 type GaugeSaver interface {
 	SaveGauge(ctx context.Context, name string, value float64) error
 }
 
-func New(saver GaugeSaver, l *slog.Logger) http.HandlerFunc {
+// Auditor узнаёт о принятых метриках; кому он передаст событие, хендлеру неважно.
+// Enabled позволяет не собирать событие, когда его некому отправить.
+type Auditor interface {
+	Enabled() bool
+	Notify(event audit.Event)
+}
+
+// New возвращает хендлер POST /update/gauge/{name}/{value}: он записывает value
+// в метрику name. Имя и значение хендлер берёт из параметров пути name и value,
+// поэтому маршрут должен их объявлять.
+//
+// Ответы:
+//   - 200 без тела — значение сохранено;
+//   - 400 — value не разбирается как float64;
+//   - 404 — имя пустое;
+//   - 500 — сбой хранилища, подробности уходят в лог l.
+//
+// О каждой принятой метрике хендлер сообщает auditor, если аудит включён.
+func New(saver GaugeSaver, auditor Auditor, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		if name == "" {
@@ -34,5 +57,11 @@ func New(saver GaugeSaver, l *slog.Logger) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
+
+		// Событие собирается, только если есть кому его отправить: по умолчанию
+		// аудит выключен.
+		if auditor.Enabled() {
+			auditor.Notify(audit.NewEvent(r, name))
+		}
 	}
 }

@@ -27,6 +27,8 @@ func (w *responseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// WithLogging пишет в log запись уровня Info о каждом запросе: URI, метод, код
+// ответа, размер тела ответа в байтах и длительность обработки.
 func WithLogging(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +38,9 @@ func WithLogging(log *slog.Logger) func(http.Handler) http.Handler {
 
 			next.ServeHTTP(lw, r)
 
-			log.Info("request handled",
+			// LogAttrs, а не Info: запись идёт на каждый запрос, а Info упаковывал бы
+			// каждый атрибут в any, то есть в отдельную аллокацию.
+			log.LogAttrs(r.Context(), slog.LevelInfo, "request handled",
 				slog.String("uri", r.RequestURI),
 				slog.String("method", r.Method),
 				slog.Duration("duration", time.Since(start)),

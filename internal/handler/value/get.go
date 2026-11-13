@@ -1,3 +1,4 @@
+// Package value отдаёт значение метрики текстом: GET /value/{type}/{name}.
 package value
 
 import (
@@ -9,11 +10,22 @@ import (
 	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
+// ValueGetter читает текущее значение метрики. Второй результат сообщает, есть
+// ли метрика с таким именем: её отсутствие — не ошибка.
 type ValueGetter interface {
 	GetGauge(ctx context.Context, name string) (float64, bool, error)
 	GetCounter(ctx context.Context, name string) (int64, bool, error)
 }
 
+// New возвращает хендлер GET /value/{type}/{name}. Тип и имя хендлер берёт из
+// параметров пути type и name, поэтому маршрут должен их объявлять. Значение
+// приходит текстом: у gauge — в кратчайшей десятичной записи без экспоненты
+// (1024.5, 0.001), у counter — целым числом.
+//
+// Ответы:
+//   - 200 со значением — метрика найдена;
+//   - 404 — тип неизвестен или метрики с таким именем нет;
+//   - 500 — сбой хранилища, подробности уходят в лог l.
 func New(getter ValueGetter, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")

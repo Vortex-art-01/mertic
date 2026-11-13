@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Vortex-art-01/mertic/internal/audit"
+	"github.com/Vortex-art-01/mertic/internal/hash"
 	"github.com/Vortex-art-01/mertic/internal/model"
 	"github.com/Vortex-art-01/mertic/internal/repository"
 )
@@ -20,7 +22,9 @@ func TestRouter(t *testing.T) {
 	_ = repo.SaveGauge(t.Context(), "Alloc", 123.45)
 	_ = repo.AddCounter(t.Context(), "PollCount", 5)
 
-	ts := httptest.NewServer(newRouter(routerDeps{storage: repo, log: slog.New(slog.DiscardHandler)}))
+	l := slog.New(slog.DiscardHandler)
+
+	ts := httptest.NewServer(newRouter(routerDeps{storage: repo, auditor: audit.NewSubject(l), log: l}))
 	defer ts.Close()
 
 	tests := []struct {
@@ -349,4 +353,91 @@ func TestRouter(t *testing.T) {
 			}
 		}
 	})
+}
+
+// Тело больше maxRequestBody отклоняется кодом 413, где бы его ни читали: в
+// хендлере или при проверке подписи. Предел действует на распакованное тело:
+// сжатый пакет укладывается в него с большим запасом, но развернуться в памяти
+// дальше предела не может.
+func TestRouterLimitsRequestBody(t *testing.T) {
+	const key = "secret"
+
+	l := slog.New(slog.DiscardHandler)
+
+	ts := httptest.NewServer(newRouter(routerDeps{
+		storage: repository.NewMemStorage(),
+		auditor: audit.NewSubject(l),
+		key:     key,
+		log:     l,
+	}))
+	defer ts.Close()
+
+	// Пустой пакет ровно из size байт: пробелы вокруг JSON-значения допустимы,
+	// поэтому и тело на самом пределе остаётся валидным.
+	padded := func(size int) []byte {
+		return []byte("[" + strings.Repeat(" ", size-2) + "]")
+	}
+
+	atLimit, overLimit := padded(maxRequestBody), padded(maxRequestBody+1)
+
+	tests := []struct {
+		name       string
+		path       string
+		body       []byte
+		compress   bool
+		sign       bool
+		wantStatus int
+	}{
+		{name: "batch at the limit", path: "/updates/", body: atLimit, wantStatus: http.StatusOK},
+		{name: "batch over the limit", path: "/updates/", body: overLimit, wantStatus: http.StatusRequestEntityTooLarge},
+		{name: "metric over the limit", path: "/update/", body: overLimit, wantStatus: http.StatusRequestEntityTooLarge},
+		{name: "value request over the limit", path: "/value/", body: overLimit, wantStatus: http.StatusRequestEntityTooLarge},
+		{name: "compressed batch at the limit", path: "/updates/", body: atLimit, compress: true, wantStatus: http.StatusOK},
+		{
+			name: "compressed batch over the limit after unpacking", path: "/updates/", body: overLimit,
+			compress: true, wantStatus: http.StatusRequestEntityTooLarge,
+		},
+		{name: "signed batch at the limit", path: "/updates/", body: atLimit, sign: true, wantStatus: http.StatusOK},
+		{
+			name: "signed batch over the limit", path: "/updates/", body: overLimit,
+			sign: true, wantStatus: http.StatusRequestEntityTooLarge,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := tt.body
+			if tt.compress {
+				body = gzipped(t, tt.body)
+
+				// Иначе тест не отличил бы предел на распакованное тело от предела
+				// на то, что пришло по сети.
+				if len(body) > maxRequestBody/100 {
+					t.Fatalf("compressed body is %d bytes, want it far below the limit", len(body))
+				}
+			}
+
+			req, err := http.NewRequest(http.MethodPost, ts.URL+tt.path, bytes.NewReader(body))
+			if err != nil {
+				t.Fatalf("failed to create request: %v", err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			if tt.compress {
+				req.Header.Set("Content-Encoding", "gzip")
+			}
+			if tt.sign {
+				req.Header.Set(hash.Header, hash.Sign(tt.body, key))
+			}
+
+			res, err := ts.Client().Do(req)
+			if err != nil {
+				t.Fatalf("request failed: %v", err)
+			}
+			defer res.Body.Close()
+
+			if res.StatusCode != tt.wantStatus {
+				t.Errorf("status = %d, want %d", res.StatusCode, tt.wantStatus)
+			}
+		})
+	}
 }

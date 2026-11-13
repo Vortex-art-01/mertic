@@ -1,3 +1,4 @@
+// Package counter обновляет счётчик через URL: POST /update/counter/{name}/{value}.
 package counter
 
 import (
@@ -5,13 +6,35 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+
+	"github.com/Vortex-art-01/mertic/internal/audit"
 )
 
+// CounterSaver прибавляет приращение к счётчику: сервер хранит сумму всех
+// присланных значений.
 type CounterSaver interface {
 	AddCounter(ctx context.Context, name string, value int64) error
 }
 
-func New(saver CounterSaver, l *slog.Logger) http.HandlerFunc {
+// Auditor узнаёт о принятых метриках; кому он передаст событие, хендлеру неважно.
+// Enabled позволяет не собирать событие, когда его некому отправить.
+type Auditor interface {
+	Enabled() bool
+	Notify(event audit.Event)
+}
+
+// New возвращает хендлер POST /update/counter/{name}/{value}: он прибавляет
+// value к счётчику name. Имя и приращение хендлер берёт из параметров пути name
+// и value, поэтому маршрут должен их объявлять.
+//
+// Ответы:
+//   - 200 без тела — приращение учтено;
+//   - 400 — value не разбирается как int64;
+//   - 404 — имя пустое;
+//   - 500 — сбой хранилища, подробности уходят в лог l.
+//
+// О каждой принятой метрике хендлер сообщает auditor, если аудит включён.
+func New(saver CounterSaver, auditor Auditor, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		if name == "" {
@@ -34,5 +57,11 @@ func New(saver CounterSaver, l *slog.Logger) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
+
+		// Событие собирается, только если есть кому его отправить: по умолчанию
+		// аудит выключен.
+		if auditor.Enabled() {
+			auditor.Notify(audit.NewEvent(r, name))
+		}
 	}
 }

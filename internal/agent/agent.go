@@ -1,3 +1,9 @@
+// Package agent собирает метрики рантайма Go и системы и отправляет их на сервер.
+//
+// [Collector] накапливает метрики между отправками, [Client] отправляет пакет на
+// POST /updates/, а [Agent] запускает их по расписанию: опрашивает источники
+// каждые pollInterval, раз в reportInterval собирает пакет и передаёт его
+// воркерам, число которых ограничивает одновременные запросы к серверу.
 package agent
 
 import (
@@ -9,6 +15,7 @@ import (
 	"github.com/Vortex-art-01/mertic/internal/model"
 )
 
+// MetricsSender отправляет пакет метрик на сервер. Его реализует [Client].
 type MetricsSender interface {
 	SendBatch(ctx context.Context, metrics []model.Metrics) error
 }
@@ -20,6 +27,8 @@ type batch struct {
 	delta   int64
 }
 
+// Agent опрашивает метрики и отправляет их на сервер по расписанию. Создаётся
+// функцией [New] и запускается методом [Agent.Run].
 type Agent struct {
 	collector      *Collector
 	sender         MetricsSender
@@ -29,6 +38,10 @@ type Agent struct {
 	rateLimit      int
 }
 
+// New возвращает агента, который каждые pollInterval опрашивает метрики, раз в
+// reportInterval отправляет накопленное через sender и держит не больше
+// rateLimit одновременных отправок; rateLimit меньше единицы считается единицей.
+// Ошибки опроса и отправки агент пишет в l.
 func New(sender MetricsSender, pollInterval, reportInterval time.Duration, rateLimit int, l *slog.Logger) *Agent {
 	if rateLimit < 1 {
 		rateLimit = 1
@@ -44,6 +57,9 @@ func New(sender MetricsSender, pollInterval, reportInterval time.Duration, rateL
 	}
 }
 
+// Run опрашивает и отправляет метрики, пока не отменён ctx, и возвращается, когда
+// остановятся все горутины агента. Если пакет так и не удалось отправить,
+// приращение PollCount не теряется: оно уйдёт со следующим пакетом.
 func (a *Agent) Run(ctx context.Context) {
 	batches := make(chan batch)
 

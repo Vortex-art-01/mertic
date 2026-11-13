@@ -6,33 +6,61 @@ import (
 	"net/http"
 
 	"github.com/Vortex-art-01/mertic/internal/hash"
+	"github.com/Vortex-art-01/mertic/internal/httpbody"
 )
 
+// WithHash проверяет подписи запросов и подписывает ответы ключом key. Подпись —
+// HMAC-SHA256 от тела в hex — передаётся в заголовке [hash.Header].
+//
+// Подпись запроса проверяется, только если клиент её прислал: запрос без
+// заголовка или со значением [hash.None] проходит без проверки, а с неверной
+// подписью отклоняется с кодом 400. Почему так, объяснено у [hash.None]. Для
+// проверки тело читается в память целиком, поэтому перед WithHash должна стоять
+// [WithBodyLimit]: тело больше её предела отклоняется с кодом 413.
+//
+// Подписывается каждый ответ. Для этого мидлварь накапливает ответ хендлера в
+// памяти и отдаёт клиенту только целиком, так что потоковых ответов под ней нет.
+//
+// С пустым key подписи выключены: мидлварь возвращает next как есть.
 func WithHash(key string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if key == "" {
 			return next
 		}
 
+		signer := hash.NewSigner(key)
+
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Подпись проверяется, только если клиент её прислал: политика
 			// «кто подписал, того и проверяем» описана у hash.None
 			if got := r.Header.Get(hash.Header); got != "" && got != hash.None {
-				body, err := io.ReadAll(r.Body)
-				if err != nil {
+				body := httpbody.GetBuffer()
+				defer httpbody.PutBuffer(body)
+
+				// Тело читается целиком до проверки подписи, то есть от любого
+				// клиента, приславшего заголовок. Поэтому без WithBodyLimit перед
+				// этой мидлварью его размер ничем не ограничен.
+				if _, err := body.ReadFrom(r.Body); err != nil {
+					if httpbody.TooLarge(err) {
+						http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+						return
+					}
+
 					http.Error(w, "failed to read request body", http.StatusBadRequest)
 					return
 				}
 
-				r.Body = io.NopCloser(bytes.NewReader(body))
+				r.Body = io.NopCloser(bytes.NewReader(body.Bytes()))
 
-				if !hash.Valid(body, key, got) {
+				if !signer.Valid(body.Bytes(), got) {
 					http.Error(w, "invalid hash", http.StatusBadRequest)
 					return
 				}
 			}
 
-			hw := &hashWriter{ResponseWriter: w, key: key}
+			hw := &hashWriter{ResponseWriter: w, signer: signer, body: httpbody.GetBuffer()}
+			defer httpbody.PutBuffer(hw.body)
+
 			next.ServeHTTP(hw, r)
 			hw.flush()
 		})
@@ -47,9 +75,9 @@ func WithHash(key string) func(http.Handler) http.Handler {
 // для большого или потокового ответа такую подпись придётся пересматривать.
 type hashWriter struct {
 	http.ResponseWriter
-	key    string
+	signer *hash.Signer
 	status int
-	body   bytes.Buffer
+	body   *bytes.Buffer
 }
 
 func (w *hashWriter) Unwrap() http.ResponseWriter {
@@ -71,7 +99,7 @@ func (w *hashWriter) Write(b []byte) (int, error) {
 }
 
 func (w *hashWriter) flush() {
-	w.Header().Set(hash.Header, hash.Sign(w.body.Bytes(), w.key))
+	w.Header().Set(hash.Header, w.signer.Sign(w.body.Bytes()))
 
 	if w.status == 0 {
 		w.status = http.StatusOK

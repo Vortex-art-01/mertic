@@ -3,9 +3,11 @@ package middleware
 import (
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/Vortex-art-01/mertic/internal/hash"
@@ -164,6 +166,37 @@ func TestWithHashWithoutKeyDoesNothing(t *testing.T) {
 	if sign := res.Header.Get(hash.Header); sign != "" {
 		t.Errorf("response signed with %q, want no signature without a key", sign)
 	}
+}
+
+// Буферы для тел запроса и ответа переиспользуются, поэтому одновременные запросы не
+// должны получать чужие данные: и тело, и подпись у каждого свои.
+func TestWithHashConcurrentRequestsDoNotMix(t *testing.T) {
+	handler := WithHash(testKey)(echoHandler("application/json"))
+
+	var running sync.WaitGroup
+
+	for g := range 16 {
+		running.Go(func() {
+			for i := range 50 {
+				want := fmt.Sprintf(`{"goroutine":%d,"request":%d}`, g, i)
+
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, signedRequest(want, hash.Sign([]byte(want), testKey)))
+
+				if rec.Code != http.StatusOK {
+					t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+				}
+				if got := rec.Body.String(); got != want {
+					t.Errorf("body = %q, want %q", got, want)
+				}
+				if sign := rec.Header().Get(hash.Header); !hash.Valid([]byte(want), testKey, sign) {
+					t.Errorf("response signature %q does not match body %q", sign, want)
+				}
+			}
+		})
+	}
+
+	running.Wait()
 }
 
 // Связка с gzip — тот случай, ради которого middleware и стоит внутри него:

@@ -8,11 +8,24 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/Vortex-art-01/mertic/internal/audit"
 	"github.com/Vortex-art-01/mertic/internal/model"
 )
+
+type mockAuditor struct {
+	events   []audit.Event
+	disabled bool
+}
+
+func (m *mockAuditor) Enabled() bool { return !m.disabled }
+
+func (m *mockAuditor) Notify(event audit.Event) {
+	m.events = append(m.events, event)
+}
 
 type mockStorage struct {
 	gauges   map[string]float64
@@ -70,7 +83,7 @@ func do(t *testing.T, storage MetricsStorage, body string) (*http.Response, stri
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	New(storage, l)(w, req)
+	New(storage, &mockAuditor{}, l)(w, req)
 
 	return w.Result(), logs.String()
 }
@@ -249,6 +262,91 @@ func TestNewReportsStorageFailure(t *testing.T) {
 			}
 			if !strings.Contains(logs, "storage is down") {
 				t.Errorf("storage error not logged, got:\n%s", logs)
+			}
+		})
+	}
+}
+
+// С выключенным аудитом событие не собирается и никому не отправляется.
+func TestNewSkipsEventWhenAuditIsDisabled(t *testing.T) {
+	storage := newMockStorage()
+	auditor := &mockAuditor{disabled: true}
+
+	req := httptest.NewRequest(http.MethodPost, "/update",
+		strings.NewReader(`{"id":"Alloc","type":"gauge","value":1}`))
+	w := httptest.NewRecorder()
+
+	New(storage, auditor, slog.New(slog.DiscardHandler))(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if _, ok := storage.gauges["Alloc"]; !ok {
+		t.Error("gauge was not stored")
+	}
+	if len(auditor.events) != 0 {
+		t.Errorf("events = %+v, want none", auditor.events)
+	}
+}
+
+// В аудит попадают только принятые метрики — с именем и адресом клиента.
+func TestNewNotifiesAuditor(t *testing.T) {
+	tests := []struct {
+		name        string
+		body        string
+		storageErr  error
+		wantMetrics []string
+	}{
+		{
+			name:        "gauge",
+			body:        `{"id":"Alloc","type":"gauge","value":1}`,
+			wantMetrics: []string{"Alloc"},
+		},
+		{
+			name:        "counter",
+			body:        `{"id":"PollCount","type":"counter","delta":1}`,
+			wantMetrics: []string{"PollCount"},
+		},
+		{name: "malformed json", body: `{"id":"Alloc","type":`},
+		{name: "empty name", body: `{"id":"","type":"gauge","value":1}`},
+		{name: "unknown type", body: `{"id":"Alloc","type":"histogram","value":1}`},
+		{name: "gauge without value", body: `{"id":"Alloc","type":"gauge"}`},
+		{
+			name:       "storage failure",
+			body:       `{"id":"Alloc","type":"gauge","value":1}`,
+			storageErr: errors.New("storage is down"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			storage := newMockStorage()
+			storage.err = tt.storageErr
+
+			auditor := &mockAuditor{}
+
+			req := httptest.NewRequest(http.MethodPost, "/update", strings.NewReader(tt.body))
+			req.RemoteAddr = "192.168.0.42:5555"
+
+			New(storage, auditor, slog.New(slog.DiscardHandler))(httptest.NewRecorder(), req)
+
+			if tt.wantMetrics == nil {
+				if len(auditor.events) != 0 {
+					t.Errorf("events = %+v, want none", auditor.events)
+				}
+				return
+			}
+
+			if len(auditor.events) != 1 {
+				t.Fatalf("got %d events, want 1", len(auditor.events))
+			}
+
+			event := auditor.events[0]
+			if !slices.Equal(event.Metrics, tt.wantMetrics) {
+				t.Errorf("metrics = %v, want %v", event.Metrics, tt.wantMetrics)
+			}
+			if event.IPAddress != "192.168.0.42" {
+				t.Errorf("ip_address = %q, want %q", event.IPAddress, "192.168.0.42")
 			}
 		})
 	}

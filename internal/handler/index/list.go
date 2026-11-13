@@ -1,27 +1,23 @@
+// Package index отдаёт HTML-страницу со всеми метриками: GET /.
 package index
 
 import (
-	"bytes"
 	"context"
-	"html/template"
+	"html"
 	"log/slog"
-	"maps"
 	"net/http"
 	"slices"
 	"strconv"
 )
 
+// MetricsLister возвращает все метрики разом. Хендлер полученные карты не меняет.
 type MetricsLister interface {
 	Gauges(ctx context.Context) (map[string]float64, error)
 	Counters(ctx context.Context) (map[string]int64, error)
 }
 
-type row struct {
-	Name  string
-	Value string
-}
-
-var pageTemplate = template.Must(template.New("index").Parse(`<!DOCTYPE html>
+const (
+	pageHead = `<!DOCTYPE html>
 <html lang="ru">
 <head>
 	<meta charset="utf-8">
@@ -29,15 +25,30 @@ var pageTemplate = template.Must(template.New("index").Parse(`<!DOCTYPE html>
 </head>
 <body>
 	<h1>Metrics</h1>
-	<ul>
-	{{- range .}}
-		<li>{{.Name}} = {{.Value}}</li>
-	{{- end}}
+	<ul>`
+
+	pageFoot = `
 	</ul>
 </body>
 </html>
-`))
+`
 
+	rowHead = "\n\t\t<li>"
+	rowSep  = " = "
+	rowFoot = "</li>"
+
+	// rowSize — запас на строку списка: теги, имя и значение обычно в него умещаются,
+	// и страница собирается за одно выделение памяти.
+	rowSize = 64
+)
+
+// New возвращает хендлер GET /: HTML-страницу, где каждая метрика — строка
+// списка «имя = значение». Сначала идут gauge, затем counter, внутри группы —
+// по имени. Имена экранируются, поэтому имя метрики не внедрит в страницу
+// разметку.
+//
+// Ответы: 200 со страницей (Content-Type: text/html) или 500 при сбое
+// хранилища, подробности которого уходят в лог l.
 func New(lister MetricsLister, l *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		gauges, err := lister.Gauges(r.Context())
@@ -54,24 +65,51 @@ func New(lister MetricsLister, l *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		rows := make([]row, 0, len(gauges)+len(counters))
-		for _, name := range slices.Sorted(maps.Keys(gauges)) {
-			rows = append(rows, row{Name: name, Value: strconv.FormatFloat(gauges[name], 'f', -1, 64)})
-		}
-		for _, name := range slices.Sorted(maps.Keys(counters)) {
-			rows = append(rows, row{Name: name, Value: strconv.FormatInt(counters[name], 10)})
-		}
-
-		var buf bytes.Buffer
-
-		if err := pageTemplate.Execute(&buf, rows); err != nil {
-			l.Error("index: failed to render page", slog.Any("error", err))
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		_, _ = buf.WriteTo(w)
+		_, _ = w.Write(renderPage(gauges, counters))
 	}
+}
+
+// renderPage собирает страницу вручную, а не через html/template: шаблон делал на
+// каждую строку списка два десятка аллокаций через reflect, и при 1% запросов к
+// странице на неё приходилось больше четверти всех объектов сервера. Имя метрики
+// задаёт клиент, поэтому оно экранируется; значения — числа, экранировать в них нечего.
+func renderPage(gauges map[string]float64, counters map[string]int64) []byte {
+	size := len(pageHead) + len(pageFoot) + (len(gauges)+len(counters))*rowSize
+
+	page := make([]byte, 0, size)
+	page = append(page, pageHead...)
+
+	for _, name := range sortedNames(gauges) {
+		page = appendRowHead(page, name)
+		page = strconv.AppendFloat(page, gauges[name], 'f', -1, 64)
+		page = append(page, rowFoot...)
+	}
+
+	for _, name := range sortedNames(counters) {
+		page = appendRowHead(page, name)
+		page = strconv.AppendInt(page, counters[name], 10)
+		page = append(page, rowFoot...)
+	}
+
+	return append(page, pageFoot...)
+}
+
+func appendRowHead(page []byte, name string) []byte {
+	page = append(page, rowHead...)
+	page = append(page, html.EscapeString(name)...)
+
+	return append(page, rowSep...)
+}
+
+func sortedNames[V any](metrics map[string]V) []string {
+	names := make([]string, 0, len(metrics))
+	for name := range metrics {
+		names = append(names, name)
+	}
+
+	slices.Sort(names)
+
+	return names
 }
