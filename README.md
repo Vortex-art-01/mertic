@@ -287,6 +287,7 @@ go run ./cmd/server --audit-file ./audit.log --audit-url http://localhost:9090/a
 cmd/
   agent/          точка входа агента и разбор флагов
   server/         точка входа сервера, роутер и разбор флагов
+  staticlint/     статический анализатор кода: multichecker и свой анализатор osexit
 internal/
   agent/          сбор метрик, отправка пакетами, классификация ошибок
   audit/          события аудита, их рассылка и приёмники: файл и удалённый сервер
@@ -345,11 +346,35 @@ TEST_DATABASE_DSN='postgres://postgres:postgres@localhost:5432/praktikum?sslmode
   go test ./internal/repository/
 ```
 
-Покрытие кода тестами — 77,2% без базы:
+Покрытие кода тестами — около 78% без базы:
 
 ```bash
 go test -coverprofile=cover.out ./...
 go tool cover -func=cover.out | tail -1
+```
+
+### Статический анализ
+
+Кроме `go vet`, код проверяет собственный multichecker — [`cmd/staticlint`](cmd/staticlint). В нём собраны стандартные анализаторы `golang.org/x/tools`, проверки [staticcheck](https://staticcheck.dev), сторонние `bodyclose`, `errorlint` и `nilerr` и свой анализатор `osexit`: он запрещает прямой вызов `os.Exit` в функции `main` пакета `main`.
+
+```bash
+go build -o cmd/staticlint/staticlint ./cmd/staticlint
+./cmd/staticlint/staticlint ./...
+```
+
+Если замечаний нет, анализатор ничего не печатает и завершается с кодом `0`. Запущенный так, он держит в памяти весь код проекта вместе с зависимостями — это несколько гигабайт, и 32-битной сборке их не хватает. Тот же анализатор можно передать команде `go vet`: она запускает его отдельным процессом на каждый пакет и кэширует результаты, так что памяти нужно намного меньше:
+
+```bash
+go vet -vettool=cmd/staticlint/staticlint ./...
+```
+
+В Windows имя файла в этих командах пишется с расширением: `staticlint.exe`.
+
+Как устроен запуск и что ищет каждый анализатор, описано в документации пакетов:
+
+```bash
+go doc ./cmd/staticlint
+go doc ./cmd/staticlint/osexit
 ```
 
 ### Автотесты Практикума

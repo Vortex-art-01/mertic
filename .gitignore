@@ -16,6 +16,7 @@ cmd/agent/main
 cmd/agent/agent
 cmd/server/main
 cmd/server/server
+cmd/staticlint/staticlint
 
 # Дамп метрик сервера
 metrics-db.json
