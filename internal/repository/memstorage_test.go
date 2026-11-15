@@ -71,11 +71,7 @@ func TestMemStorageSaveBatchConcurrently(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range writers {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			for range batches {
 				value, delta := 1.0, int64(1)
 				err := storage.SaveBatch(t.Context(), []model.Metrics{
@@ -87,7 +83,7 @@ func TestMemStorageSaveBatchConcurrently(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
