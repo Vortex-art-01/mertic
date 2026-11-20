@@ -67,8 +67,7 @@ func (r *Remote) Update(ctx context.Context, event Event) error {
 // withoutURL убирает адрес из ошибки net/url: ошибки уходят в лог, а в полном
 // URL может быть токен доступа.
 func withoutURL(err error) error {
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) {
+	if urlErr, ok := errors.AsType[*url.Error](err); ok {
 		return urlErr.Err
 	}
 

@@ -8,18 +8,19 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"sync"
+
+	"github.com/Vortex-art-01/mertic/internal/pool"
 )
 
 // maxPooledSize ограничивает буферы, которые возвращаются в пул: из-за одного большого
 // тела память не должна оставаться занятой, пока буфер ходит по кругу.
 const maxPooledSize = 64 << 10
 
-var buffers = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+var buffers = pool.New(func() *bytes.Buffer { return new(bytes.Buffer) })
 
 // GetBuffer возвращает пустой буфер.
 func GetBuffer() *bytes.Buffer {
-	return buffers.Get().(*bytes.Buffer)
+	return buffers.Get()
 }
 
 // PutBuffer возвращает буфер в пул. После этого ни им, ни срезами его содержимого
@@ -29,7 +30,6 @@ func PutBuffer(buf *bytes.Buffer) {
 		return
 	}
 
-	buf.Reset()
 	buffers.Put(buf)
 }
 

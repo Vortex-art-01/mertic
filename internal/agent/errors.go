@@ -53,13 +53,11 @@ func (e *StatusError) Retriable() bool {
 // retriable сообщает, имеет ли смысл повторить отправку, завершившуюся
 // ошибкой err. Годится как предикат для retry.Do.
 func retriable(err error) bool {
-	var transport *TransportError
-	if errors.As(err, &transport) {
+	if _, ok := errors.AsType[*TransportError](err); ok {
 		return true
 	}
 
-	var status *StatusError
-	if errors.As(err, &status) {
+	if status, ok := errors.AsType[*StatusError](err); ok {
 		return status.Retriable()
 	}
 

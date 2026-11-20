@@ -7,6 +7,7 @@ import (
 	"hash/crc32"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
@@ -31,12 +32,7 @@ func compressible(contentType string) bool {
 	mediaType, _, _ := strings.Cut(contentType, ";")
 	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
 
-	for _, t := range compressibleTypes {
-		if mediaType == t {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(compressibleTypes, mediaType)
 }
 
 func acceptsGzip(r *http.Request) bool {

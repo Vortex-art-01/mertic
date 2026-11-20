@@ -8,7 +8,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"hash"
-	"sync"
+
+	"github.com/Vortex-art-01/mertic/internal/pool"
 )
 
 // Контракт протокола подписи.
@@ -33,14 +34,19 @@ const (
 
 // Signer считает и проверяет подписи одним ключом. hmac.New выделяет память под два
 // состояния SHA-256 и блоки ключа, поэтому сервер, который проверяет каждый запрос и
-// подписывает каждый ответ, переиспользует их через пул. Signer можно использовать
-// из нескольких горутин.
+// подписывает каждый ответ, переиспользует их через [pool.Pool]. Signer можно
+// использовать из нескольких горутин.
 type Signer struct {
-	macs sync.Pool
+	macs *pool.Pool[*mac]
 }
 
 // mac — вычислитель HMAC вместе с буфером под результат: через интерфейс hash.Hash
-// буфер со стека всё равно ушёл бы в кучу.
+// буфер со стека всё равно ушёл бы в кучу. Метод Reset создаёт утилита cmd/reset, а
+// вызывает пул, когда вычислитель возвращают. Сброс при возврате, а не перед
+// расчётом, выгоден и здесь: первый Reset у hmac дорогой, а разовым подписям он
+// вообще не нужен.
+//
+// generate:reset
 type mac struct {
 	hash hash.Hash
 	sum  [sha256.Size]byte
@@ -81,31 +87,21 @@ func (m *mac) valid(data []byte, want string) bool {
 
 // NewSigner возвращает Signer с ключом key.
 func NewSigner(key string) *Signer {
-	s := &Signer{}
-	s.macs.New = func() any { return newMAC(key) }
-
-	return s
-}
-
-// put сбрасывает вычислитель и возвращает его в пул. Сброс здесь, а не перед расчётом,
-// потому что первый Reset у hmac дорогой, а разовым подписям он вообще не нужен.
-func (s *Signer) put(m *mac) {
-	m.hash.Reset()
-	s.macs.Put(m)
+	return &Signer{macs: pool.New(func() *mac { return newMAC(key) })}
 }
 
 // Sign возвращает подпись data в hex.
 func (s *Signer) Sign(data []byte) string {
-	m := s.macs.Get().(*mac)
-	defer s.put(m)
+	m := s.macs.Get()
+	defer s.macs.Put(m)
 
 	return m.sign(data)
 }
 
 // Valid сообщает, совпадает ли подпись want в hex с подписью data.
 func (s *Signer) Valid(data []byte, want string) bool {
-	m := s.macs.Get().(*mac)
-	defer s.put(m)
+	m := s.macs.Get()
+	defer s.macs.Put(m)
 
 	return m.valid(data, want)
 }

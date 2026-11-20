@@ -95,8 +95,7 @@ func TestWithBodyLimitAfterGzipLimitsUnpackedBody(t *testing.T) {
 
 	handler.ServeHTTP(httptest.NewRecorder(), req)
 
-	var tooLarge *http.MaxBytesError
-	if !errors.As(readErr, &tooLarge) {
+	if _, ok := errors.AsType[*http.MaxBytesError](readErr); !ok {
 		t.Errorf("read error = %v, want *http.MaxBytesError", readErr)
 	}
 }
