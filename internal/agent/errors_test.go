@@ -47,9 +47,8 @@ func TestRetriableUnwrapsError(t *testing.T) {
 	}
 
 	// Обёртка не прячет исходную ошибку.
-	var opErr *net.OpError
-	if !errors.As(err, &opErr) {
-		t.Errorf("errors.As(%v, *net.OpError) = false, want true", err)
+	if _, ok := errors.AsType[*net.OpError](err); !ok {
+		t.Errorf("errors.AsType[*net.OpError](%v) = false, want true", err)
 	}
 }
 

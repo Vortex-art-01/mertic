@@ -18,15 +18,13 @@ func Retriable(err error) bool {
 	}
 
 	// Сервер ответил и назвал причину — решает код ошибки.
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 		return retriableCode(pgErr.Code)
 	}
 
 	// Ответа не было: соединение не установилось или оборвалось на
 	// полпути. До сервера запрос мог и не дойти, так что повторить стоит.
-	var connErr *pgconn.ConnectError
-	if errors.As(err, &connErr) {
+	if _, ok := errors.AsType[*pgconn.ConnectError](err); ok {
 		return true
 	}
 

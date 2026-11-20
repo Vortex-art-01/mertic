@@ -104,7 +104,7 @@ func TestRunRestoresAndSavesOnShutdown(t *testing.T) {
 	cancel()
 
 	select {
-	case err := <-done:
+	case err = <-done:
 		if err != nil {
 			t.Fatalf("run() error = %v", err)
 		}
@@ -158,7 +158,7 @@ func TestRunKeepsDumpWhenAddressIsBusy(t *testing.T) {
 		restore:       false,
 	}
 
-	if err := run(context.Background(), cfg, slog.New(slog.DiscardHandler)); err == nil {
+	if err = run(context.Background(), cfg, slog.New(slog.DiscardHandler)); err == nil {
 		t.Fatal("run() error = nil, want an error for a busy address")
 	}
 
@@ -364,7 +364,7 @@ func TestRunServesPprofOnDedicatedAddress(t *testing.T) {
 	cancel()
 
 	select {
-	case err := <-done:
+	case err = <-done:
 		if err != nil {
 			t.Fatalf("run() error = %v", err)
 		}

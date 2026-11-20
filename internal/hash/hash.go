@@ -40,7 +40,10 @@ type Signer struct {
 }
 
 // mac — вычислитель HMAC вместе с буфером под результат: через интерфейс hash.Hash
-// буфер со стека всё равно ушёл бы в кучу.
+// буфер со стека всё равно ушёл бы в кучу. Метод Reset, которым вычислитель
+// сбрасывается перед возвратом в пул, создаёт утилита cmd/reset.
+//
+// generate:reset
 type mac struct {
 	hash hash.Hash
 	sum  [sha256.Size]byte
@@ -90,7 +93,7 @@ func NewSigner(key string) *Signer {
 // put сбрасывает вычислитель и возвращает его в пул. Сброс здесь, а не перед расчётом,
 // потому что первый Reset у hmac дорогой, а разовым подписям он вообще не нужен.
 func (s *Signer) put(m *mac) {
-	m.hash.Reset()
+	m.Reset()
 	s.macs.Put(m)
 }
 
