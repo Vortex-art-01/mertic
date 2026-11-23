@@ -118,6 +118,32 @@ go build -o cmd/server/server ./cmd/server
 go build -o cmd/agent/agent ./cmd/agent
 ```
 
+При старте сервер и агент первыми строками печатают в stdout версию, дату и коммит сборки:
+
+```
+Build version: v1.0.0
+Build date: 2026-11-23T12:00:00Z
+Build commit: 8c6ab07
+```
+
+Значения хранятся в переменных `buildVersion`, `buildDate` и `buildCommit` пакета `main`, а задаёт их линкер флагом `-X`. Если значение не задано, например при `go run` или сборке командами выше, вместо него печатается `N/A`. Переменные называются в обоих приложениях одинаково, так что флаги линкера у них общие:
+
+```bash
+LDFLAGS="-X main.buildVersion=v1.0.0 -X main.buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.buildCommit=$(git rev-parse --short HEAD)"
+go build -ldflags "$LDFLAGS" -o cmd/server/server ./cmd/server
+go build -ldflags "$LDFLAGS" -o cmd/agent/agent ./cmd/agent
+```
+
+То же в PowerShell:
+
+```powershell
+$ldflags = "-X main.buildVersion=v1.0.0 -X main.buildDate=$([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')) -X main.buildCommit=$(git rev-parse --short HEAD)"
+go build -ldflags $ldflags -o cmd/server/server.exe ./cmd/server
+go build -ldflags $ldflags -o cmd/agent/agent.exe ./cmd/agent
+```
+
+Значение после `-X` не должно содержать пробелов, иначе его придётся заключать в кавычки внутри `-ldflags`. Поэтому дата здесь записана в формате RFC 3339.
+
 ## Конфигурация
 
 Оба приложения настраиваются флагами и переменными окружения. **Переменная окружения важнее флага**, флаг важнее значения по умолчанию.
@@ -294,6 +320,7 @@ cmd/
 internal/
   agent/          сбор метрик, отправка пакетами, классификация ошибок
   audit/          события аудита, их рассылка и приёмники: файл и удалённый сервер
+  buildinfo/      сведения о сборке, которые приложения печатают при старте
   database/       пул соединений pgx и применение миграций
   dump/           сохранение метрик в файл и восстановление при старте
   gzippool/       переиспользование компрессоров gzip
@@ -441,6 +468,12 @@ go test -run='^$' -bench=Pool -benchmem ./internal/pool/
 ```bash
 go test ./...
 go vet ./...
+```
+
+Тесты сведений о сборке в `cmd/server` и `cmd/agent` собирают настоящие бинарники, с флагами линкера и без них: опечатку в имени переменной после `-X` линкер молча пропускает, и заметить её можно только по выводу приложения. Сборки занимают несколько секунд, а с флагом `-short` эти тесты пропускаются:
+
+```bash
+go test -short ./...
 ```
 
 Тесты хранилища на PostgreSQL без базы пропускаются. Чтобы прогнать их, укажите тестовую базу:

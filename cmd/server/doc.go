@@ -43,4 +43,16 @@
 //
 // По SIGINT и SIGTERM сервер перестаёт принимать соединения, дорабатывает
 // начатые запросы, записывает последний дамп и разбирает очереди аудита.
+//
+// # Сведения о сборке
+//
+// При старте сервер первыми строками печатает в stdout версию, дату и коммит
+// сборки. Их хранят переменные buildVersion, buildDate и buildCommit, а задаёт
+// линкер флагом -X; незаданное значение печатается как N/A:
+//
+//	$ go build -ldflags "-X main.buildVersion=v1.0.0 -X main.buildCommit=8c6ab07" -o server ./cmd/server
+//	$ ./server
+//	Build version: v1.0.0
+//	Build date: N/A
+//	Build commit: 8c6ab07
 package main
