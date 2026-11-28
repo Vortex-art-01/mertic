@@ -518,10 +518,17 @@ go doc ./cmd/staticlint/osexit
 
 В GitHub Actions на каждый pull request запускаются два набора:
 
-- **autotests** — функциональные тесты сервера и агента из [go-autotests](https://github.com/Yandex-Practicum/go-autotests); ветка должна называться `iter<N>`, тогда прогоняются инкременты с первого по `N`-й;
+- **autotests** — функциональные тесты сервера и агента из [go-autotests](https://pkg.go.dev/github.com/Yandex-Practicum/go-autotests); ветка должна называться `iter<N>`, тогда прогоняются инкременты с первого по `N`-й;
 - **go vet test** — `go vet` со статическим анализатором Практикума.
 
-Как запустить автотесты локально, описано в [README go-autotests](https://github.com/Yandex-Practicum/go-autotests).
+Бинарники тестов Практикум раздавал релизами репозитория `Yandex-Practicum/go-autotests`, но в конце ноября 2026 репозиторий стал недоступен (404). Поэтому оба workflow собирают их сами из исходников версии `v0.13.8`. Эти исходники хранит прокси модулей Go, а `go` сверяет их с `sum.golang.org`, так что код тот же. Команды сборки взяты из `Makefile` go-autotests: `statictest` и `random` собираются через `go build`, а `metricstest` — через `go test -c`, потому что это набор тестов. Модулю нужен Go 1.27.
+
+Статический анализатор Практикума можно запустить и локально:
+
+```bash
+go install github.com/Yandex-Practicum/go-autotests/cmd/statictest@v0.13.8
+go vet -vettool="$(go env GOPATH)/bin/statictest" ./...
+```
 
 ## Производительность
 
@@ -758,3 +765,5 @@ go tool pprof -web -sample_index=alloc_objects profiles/base.pprof
 git remote add -m v2 template https://github.com/Yandex-Practicum/go-musthave-metrics-tpl.git
 git fetch template && git checkout template/v2 .github
 ```
+
+В конце ноября 2026 шаблон, как и go-autotests, стал недоступен (404). Когда он вернётся, эти команды вернут и шаги, которые скачивают автотесты из релизов, — собирать их из прокси модулей тогда станет незачем.

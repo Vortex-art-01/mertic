@@ -37,20 +37,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v2
 
-      - name: Download autotests binaries
-        uses: robinraju/release-downloader@v1.8
-        with:
-          repository: Yandex-Practicum/go-autotests
-          latest: true
-          fileName: "*"
-          out-file-path: .tools
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Setup autotest binary
+      # Бинарники автотестов скачивались из релизов репозитория
+      # Yandex-Practicum/go-autotests, но в конце ноября 2026 он стал недоступен
+      # (404). Исходники той же версии хранит прокси модулей Go, а go сверяет их
+      # с sum.golang.org. Собираются они командами из Makefile go-autotests.
+      # Модулю нужен Go 1.27, поэтому GOTOOLCHAIN=auto разрешает go скачать
+      # тулчейн — только на этом шаге, проект собирается Go из контейнера.
+      # Когда репозиторий вернётся, шаг можно снова взять из шаблона.
+      - name: Build autotests binaries
+        env:
+          AUTOTESTS: github.com/Yandex-Practicum/go-autotests@v0.13.8
+          GOTOOLCHAIN: auto
         run: |
-          chmod -R +x $GITHUB_WORKSPACE/.tools
-          mv $GITHUB_WORKSPACE/.tools/metricstest_v2 /usr/local/bin/metricstest
-          mv $GITHUB_WORKSPACE/.tools/random /usr/local/bin/random
+          go mod download "$AUTOTESTS"
+          cd "$(go list -m -f '{{.Dir}}' "$AUTOTESTS")"
+          go test -c -o /usr/local/bin/metricstest ./cmd/metricstest_v2
+          go build -buildvcs=false -o /usr/local/bin/random ./cmd/random
 
       - name: Setup go deps
         run: |
