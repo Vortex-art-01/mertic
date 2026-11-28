@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"go/format"
 	"go/scanner"
@@ -11,58 +12,103 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"text/template"
 	"unicode"
 )
+
+// fileTemplate — каркас файла reset.gen.go: заголовок, импорты и методы Reset с
+// проверкой получателя на nil. Операторы тела шаблон получает готовыми: правила
+// сброса ветвятся по видам типов, и в коде они читаются проще, чем читались бы
+// в шаблоне.
+//
+// Отступы в шаблоне — для читателя: результат всё равно форматирует go/format.
+// Переводы строк он сохраняет, поэтому пустая строка шаблона — это пустая
+// строка файла, а у строк с if, else и end маркеры {{- и -}} срезают перевод
+// строки, чтобы такая строка не оставила в файле пустую.
+var fileTemplate = template.Must(template.New(fileName).Parse(`{{.Header}}
+
+package {{.Package}}
+{{if eq (len .Imports) 1}}
+import {{index .Imports 0}}
+{{else if .Imports}}
+import (
+{{range .Imports}}	{{.}}
+{{end}})
+{{end}}
+{{- range .Methods}}
+// Reset сбрасывает {{.Type}} для повторного использования.
+{{if .Lines -}}
+func ({{.Recv}} *{{.RecvType}}) Reset() {
+	if {{.Recv}} == nil {
+		return
+	}
+
+{{range .Lines}}	{{.}}
+{{end -}}
+}
+{{else -}}
+func ({{.Recv}} *{{.RecvType}}) Reset() {}
+{{end}}
+{{- end}}`))
+
+// fileData — то, что fileTemplate подставляет в файл.
+type fileData struct {
+	Header  string
+	Package string
+	Imports []string     // спецификации импорта: "time" или template2 "html/template"
+	Methods []methodData // в порядке объявления структур
+}
+
+// methodData — то, что fileTemplate подставляет в метод Reset одной структуры.
+type methodData struct {
+	Type     string   // имя структуры для doc-комментария
+	Recv     string   // имя получателя
+	RecvType string   // тип получателя без звёздочки, с параметрами типа: Box[T, K]
+	Lines    []string // операторы после проверки на nil; пусто — тело пустое
+}
 
 // render собирает файл reset.gen.go пакета u: заголовок, импорты и методы Reset
 // всех помеченных структур в порядке их объявления.
 func (g *generator) render(u *unit) ([]byte, bool) {
 	f := &fileGen{g: g, pkg: u.pkg.Types, imports: make(map[string]importedPkg)}
 
-	methods := make([]string, 0, len(u.targets))
+	data := fileData{Header: header, Package: u.name}
 	for _, named := range u.targets {
-		methods = append(methods, f.method(named))
+		data.Methods = append(data.Methods, f.method(named))
 	}
 
-	var b strings.Builder
+	// Импорты известны только после методов: пакет попадает в них, когда на
+	// него впервые ссылается тело.
+	data.Imports = f.importSpecs()
 
-	fmt.Fprintf(&b, "%s\n\npackage %s\n", header, u.name)
-
-	specs := make([]string, 0, len(f.imports))
-	for _, path := range slices.Sorted(maps.Keys(f.imports)) {
-		if imp := f.imports[path]; imp.name == defaultImportName(path, imp.pkgName) {
-			specs = append(specs, strconv.Quote(path))
-		} else {
-			specs = append(specs, imp.name+" "+strconv.Quote(path))
-		}
-	}
-
-	switch len(specs) {
-	case 0:
-	case 1:
-		fmt.Fprintf(&b, "\nimport %s\n", specs[0])
-	default:
-		fmt.Fprintf(&b, "\nimport (\n%s\n)\n", strings.Join(specs, "\n"))
-	}
-
-	for _, m := range methods {
-		b.WriteString("\n")
-		b.WriteString(m)
-	}
-
-	src, err := format.Source([]byte(b.String()))
+	src, err := renderSource(data)
 	if err != nil {
-		// Генератор собрал код, который не разбирается, — это ошибка в самой
-		// утилите, а не в разметке.
+		// Шаблон не выполнился или собрал код, который не разбирается, — это
+		// ошибка в самой утилите, а не в разметке.
 		g.problems = append(g.problems, problem{
 			file: displayPath(g.dir, u.path),
-			msg:  fmt.Sprintf("internal error: generated code does not parse: %v", err),
+			msg:  fmt.Sprintf("internal error: %v", err),
 		})
 
 		return nil, false
 	}
 
 	return src, true
+}
+
+// renderSource выполняет fileTemplate и форматирует результат так же, как gofmt.
+func renderSource(data fileData) ([]byte, error) {
+	var b bytes.Buffer
+	if err := fileTemplate.Execute(&b, data); err != nil {
+		return nil, fmt.Errorf("cannot execute template: %w", err)
+	}
+
+	src, err := format.Source(b.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("generated code does not parse: %w", err)
+	}
+
+	return src, nil
 }
 
 // fileGen собирает один файл reset.gen.go: ведёт его импорты.
@@ -111,6 +157,21 @@ func (f *fileGen) qualify(p *types.Package) string {
 	return imp.name
 }
 
+// importSpecs возвращает спецификации импорта файла по порядку путей. Имя пакета
+// указывается явно, только если оно не то, что читатель ожидает увидеть по пути.
+func (f *fileGen) importSpecs() []string {
+	specs := make([]string, 0, len(f.imports))
+	for _, path := range slices.Sorted(maps.Keys(f.imports)) {
+		if imp := f.imports[path]; imp.name == defaultImportName(path, imp.pkgName) {
+			specs = append(specs, strconv.Quote(path))
+		} else {
+			specs = append(specs, imp.name+" "+strconv.Quote(path))
+		}
+	}
+
+	return specs
+}
+
 // defaultImportName возвращает имя, которое читатель ожидает увидеть у пакета
 // path без явного имени в импорте: последний элемент пути, а для путей вида
 // .../chi/v5 — элемент перед номером версии. Если настоящее имя другое, render
@@ -147,7 +208,7 @@ func (f *fileGen) accessible(st *types.Struct) bool {
 // Первый узнаёт, на какие имена ссылается тело: пакеты, типы, встроенные nil и
 // clear. Второй пишет тело заново с именами получателя и переменных циклов,
 // которые ни одно из этих имён не перекрывают.
-func (f *fileGen) method(named *types.Named) string {
+func (f *fileGen) method(named *types.Named) methodData {
 	draft := &methodGen{file: f, recv: "x", free: make(map[string]bool)}
 	draft.body(named)
 
@@ -173,7 +234,7 @@ func (f *fileGen) method(named *types.Named) string {
 	m := &methodGen{file: f, recv: recv, loopVars: loopVars, free: make(map[string]bool)}
 	m.body(named)
 
-	return m.render(named)
+	return m.data(named)
 }
 
 // receiverName выбирает имя получателя. Если у типа уже есть методы, берётся
@@ -312,10 +373,8 @@ func (m *methodGen) body(named *types.Named) {
 	}
 }
 
-// render возвращает метод целиком, с doc-комментарием.
-func (m *methodGen) render(named *types.Named) string {
-	var b strings.Builder
-
+// data возвращает метод в том виде, в каком его подставляет fileTemplate.
+func (m *methodGen) data(named *types.Named) methodData {
 	recvType := named.Obj().Name()
 	if tps := named.TypeParams(); tps.Len() > 0 {
 		names := make([]string, 0, tps.Len())
@@ -326,24 +385,12 @@ func (m *methodGen) render(named *types.Named) string {
 		recvType += "[" + strings.Join(names, ", ") + "]"
 	}
 
-	fmt.Fprintf(&b, "// Reset сбрасывает %s для повторного использования.\n", named.Obj().Name())
-
-	if len(m.lines) == 0 {
-		fmt.Fprintf(&b, "func (%s *%s) Reset() {}\n", m.recv, recvType)
-		return b.String()
+	return methodData{
+		Type:     named.Obj().Name(),
+		Recv:     m.recv,
+		RecvType: recvType,
+		Lines:    m.lines,
 	}
-
-	fmt.Fprintf(&b, "func (%s *%s) Reset() {\n", m.recv, recvType)
-	fmt.Fprintf(&b, "if %s == nil {\nreturn\n}\n\n", m.recv)
-
-	for _, line := range m.lines {
-		b.WriteString(line)
-		b.WriteByte('\n')
-	}
-
-	b.WriteString("}\n")
-
-	return b.String()
 }
 
 // skipField сообщает, что i-е поле структуры st генератор не трогает: пустое

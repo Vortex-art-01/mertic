@@ -141,12 +141,65 @@ func TestPoolOfMaps(t *testing.T) {
 	}
 }
 
-func TestNewPanicsOnNilFunc(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Error("New(nil) did not panic")
-		}
-	}()
+// Без функции создания пул ведёт себя как sync.Pool без New: пустой отдаёт
+// нулевое значение T, а объект, возвращённый через Put, — снова, уже
+// сброшенным. Так же работает и нулевое значение Pool.
+func TestPoolWithoutNew(t *testing.T) {
+	pools := map[string]*pool.Pool[*object]{
+		"New(nil)":         pool.New[*object](nil),
+		"нулевое значение": new(pool.Pool[*object]),
+	}
 
-	pool.New[*object](nil)
+	for name, p := range pools {
+		t.Run(name, func(t *testing.T) {
+			if got := p.Get(); got != nil {
+				t.Fatalf("Get() on empty pool = %p, want nil", got)
+			}
+
+			// sync.Pool не обещает вернуть объект: с детектором гонок он
+			// выбрасывает часть из них. Поэтому у теста много попыток.
+			for range 100 {
+				p.Put(newObject())
+
+				if got := p.Get(); got != nil {
+					if got.resets != 1 {
+						t.Errorf("returned object was reset %d times, want 1", got.resets)
+					}
+
+					return
+				}
+			}
+
+			t.Error("Get() never returned an object passed to Put")
+		})
+	}
+}
+
+// Пул интерфейсов, как и sync.Pool, nil не хранит: вызвать Reset у него
+// нельзя, а следующий Get отдал бы nil вместо нового объекта.
+func TestPutSkipsNilInterface(t *testing.T) {
+	p := pool.New(func() pool.Resetter { return newObject() })
+
+	p.Put(nil)
+
+	if got := p.Get(); got == nil {
+		t.Error("Get() returned nil passed to Put, want a new object")
+	}
+}
+
+// У пула интерфейсов без функции создания нулевое значение — nil, и его
+// можно вернуть в пул, ничего не проверяя.
+func TestPoolOfInterfacesWithoutNew(t *testing.T) {
+	p := pool.New[pool.Resetter](nil)
+
+	r := p.Get()
+	if r != nil {
+		t.Fatalf("Get() on empty pool = %v, want nil", r)
+	}
+
+	p.Put(r)
+
+	if got := p.Get(); got != nil {
+		t.Errorf("Get() after Put(nil) = %v, want nil", got)
+	}
 }

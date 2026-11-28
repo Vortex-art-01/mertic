@@ -60,3 +60,21 @@ func ExampleNew() {
 	// Output:
 	// PollCount=5
 }
+
+// Функции создания может и не быть: тогда пустой пул, как sync.Pool без New,
+// отдаёт нулевое значение — у указателя это nil. Объект создаёт вызывающий,
+// например с ёмкостью, которую знает только он.
+func ExampleNew_withoutNewFn() {
+	buffers := pool.New[*bytes.Buffer](nil)
+
+	buf := buffers.Get()
+	if buf == nil {
+		buf = bytes.NewBuffer(make([]byte, 0, 512))
+	}
+	defer buffers.Put(buf)
+
+	fmt.Println(buf.Cap())
+
+	// Output:
+	// 512
+}
