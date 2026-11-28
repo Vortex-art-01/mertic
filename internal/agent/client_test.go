@@ -236,8 +236,7 @@ func TestClientGivesUpAfterThreeRetries(t *testing.T) {
 		t.Fatal("expected error after all attempts failed, got nil")
 	}
 
-	var status *StatusError
-	if !errors.As(err, &status) {
+	if _, ok := errors.AsType[*StatusError](err); !ok {
 		t.Fatalf("error = %v, want *StatusError", err)
 	}
 
@@ -275,8 +274,7 @@ func TestClientRetriesUnreachableServer(t *testing.T) {
 		t.Fatal("expected error when server is unreachable, got nil")
 	}
 
-	var transport *TransportError
-	if !errors.As(err, &transport) {
+	if _, ok := errors.AsType[*TransportError](err); !ok {
 		t.Errorf("error = %v, want *TransportError", err)
 	}
 }

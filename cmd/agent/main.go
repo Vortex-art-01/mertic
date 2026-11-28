@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"log/slog"
 	"os"
@@ -10,10 +11,24 @@ import (
 	"time"
 
 	"github.com/Vortex-art-01/mertic/internal/agent"
+	"github.com/Vortex-art-01/mertic/internal/buildinfo"
 	"github.com/Vortex-art-01/mertic/internal/logger"
 )
 
+// Сведения о сборке подставляет линкер флагом -X, например
+// -ldflags "-X main.buildVersion=v1.0.0". Без флага значение остаётся пустым и
+// при старте печатается как N/A.
+var (
+	buildVersion string
+	buildDate    string
+	buildCommit  string
+)
+
 func main() {
+	// Печатаем до разбора флагов: по этим строкам видно, какая сборка
+	// запущена, даже если дальше старт сорвётся из-за конфигурации.
+	fmt.Println(buildinfo.Info{Version: buildVersion, Date: buildDate, Commit: buildCommit})
+
 	if err := parseFlags(); err != nil {
 		log.Fatal(err)
 	}

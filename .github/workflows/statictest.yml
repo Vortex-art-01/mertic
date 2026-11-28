@@ -14,19 +14,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v2
 
-      - name: Download statictest binary
-        uses: robinraju/release-downloader@v1.8
-        with:
-          repository: Yandex-Practicum/go-autotests
-          latest: true
-          fileName: statictest
-          out-file-path: .tools
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Setup autotest binary
+      # Бинарник statictest скачивался из релизов репозитория
+      # Yandex-Practicum/go-autotests, но в конце ноября 2026 он стал недоступен
+      # (404). Исходники той же версии хранит прокси модулей Go, а go сверяет их
+      # с sum.golang.org. Собирается statictest командой из Makefile
+      # go-autotests. Модулю нужен Go 1.27, поэтому GOTOOLCHAIN=auto разрешает
+      # go скачать тулчейн — только на этом шаге, go vet запускается Go из
+      # контейнера. Когда репозиторий вернётся, шаг можно снова взять из шаблона.
+      - name: Build statictest binary
+        env:
+          AUTOTESTS: github.com/Yandex-Practicum/go-autotests@v0.13.8
+          GOTOOLCHAIN: auto
         run: |
-          chmod -R +x $GITHUB_WORKSPACE/.tools/statictest
-          mv $GITHUB_WORKSPACE/.tools/statictest /usr/local/bin/statictest
+          go mod download "$AUTOTESTS"
+          cd "$(go list -m -f '{{.Dir}}' "$AUTOTESTS")"
+          go build -buildvcs=false -o /usr/local/bin/statictest ./cmd/statictest
 
       - name: Run statictest
         run: |
